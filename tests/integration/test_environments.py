@@ -57,7 +57,7 @@ class TestShiftPendulum:
         obs, info = self.env.reset()
         assert obs.shape == self.env.observation_space.shape
         # oracle_tau must not be part of observation
-        assert obs.shape != (4,)  # would be 4 if oracle_tau appended
+        assert obs.shape == (3,), f"Expected (3,), got {obs.shape}. oracle_tau must not be in obs."
 
     def test_shift_occurs_at_high_rate(self):
         infos = _run_n_steps(self.env, n=100)
@@ -72,7 +72,9 @@ class TestShiftPendulum:
             env.step(env.action_space.sample())
             # Try different attribute names used by different gymnasium versions
             unwrapped = env.env.unwrapped
-            g = getattr(unwrapped, 'g', None) or getattr(unwrapped, 'gravity', None)
+            g = getattr(unwrapped, 'g', None)
+            if g is None:
+                g = getattr(unwrapped, 'gravity', None)
             if g is not None:
                 gravities_seen.add(round(float(g), 4))
         env.close()

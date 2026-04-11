@@ -71,20 +71,19 @@ class ShiftPendulum(RecordConstructorArgs, ShiftWrapper):
 
         For abrupt shifts (progress=1.0), snaps immediately.
         For gradual shifts, interpolates between current and next gravity.
+        Note: progress==1.0 on the final gradual step (per ShiftWrapper's formula),
+        so index commit always happens via the abrupt branch.
         """
         next_idx = (self._gravity_idx + 1) % len(_GRAVITY_VALUES)
         if progress >= 1.0:
-            # Abrupt: snap to next gravity
+            # Abrupt snap OR final gradual step (progress==1.0 exactly).
             self._gravity_idx = next_idx
             new_gravity = _GRAVITY_VALUES[self._gravity_idx]
         else:
-            # Gradual: interpolate between current and next
+            # Mid-gradual interpolation: apply but don't commit index yet.
             current_g = _GRAVITY_VALUES[self._gravity_idx]
             next_g = _GRAVITY_VALUES[next_idx]
             new_gravity = current_g + progress * (next_g - current_g)
-            # On final step of gradual window, commit the new index
-            if progress >= (1.0 - 1e-6):
-                self._gravity_idx = next_idx
 
         # Pendulum-v1 stores gravity as 'g' on the unwrapped env
         unwrapped = self.env.unwrapped
@@ -112,6 +111,14 @@ class ShiftPendulum(RecordConstructorArgs, ShiftWrapper):
             # XOR with a large prime ensures no aliasing with the env seed.
             self._rng = np.random.default_rng(seed ^ 0xDEADBEEF)
         self._gravity_idx = 0
+        # Sync physics engine back to initial gravity value.
+        # Without this, a reset mid-gradual-window leaves stale interpolated
+        # gravity in the physics sim while _gravity_idx reports index 0.
+        unwrapped = self.env.unwrapped
+        if hasattr(unwrapped, 'g'):
+            unwrapped.g = float(_GRAVITY_VALUES[0])
+        elif hasattr(unwrapped, 'gravity'):
+            unwrapped.gravity = float(_GRAVITY_VALUES[0])
         return super().reset(seed=seed, options=options)
 
     @property
