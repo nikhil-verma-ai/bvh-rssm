@@ -114,3 +114,53 @@ class TestTradingRegime:
     def test_no_adversarial_trigger(self):
         infos = _run_n_steps(self.env, n=100)
         assert all(not info["is_interventionist"] for info in infos)
+
+
+class TestRegimeMaze:
+    def setup_method(self):
+        from bvh_rssm.envs.regime_maze import RegimeMaze
+        self.env = RegimeMaze(seed=0)
+
+    def teardown_method(self):
+        self.env.close()
+
+    def test_check_env(self):
+        check_env(self.env, warn=True)
+
+    def test_info_contract(self):
+        infos = _run_n_steps(self.env)
+        _assert_info_contract(infos)
+
+    def test_switch_button_triggers_shift(self):
+        """Action SWITCH (=4) triggers immediate regime change (Source B)."""
+        from bvh_rssm.envs.regime_maze import RegimeMaze, ACTION_SWITCH
+        env = RegimeMaze(shift_rate=0.0, shift_type="adversarial", seed=0)
+        env.reset()
+        _, _, _, _, info = env.step(ACTION_SWITCH)
+        assert info["shift_occurred"]
+        assert info["is_interventionist"]
+        env.close()
+
+    def test_switch_sets_tau_near_zero(self):
+        """After switch button, oracle_tau resets (not stuck at 0)."""
+        from bvh_rssm.envs.regime_maze import RegimeMaze, ACTION_SWITCH
+        env = RegimeMaze(shift_rate=0.0, shift_type="adversarial", seed=0)
+        env.reset()
+        _, _, _, _, info = env.step(ACTION_SWITCH)
+        assert info["oracle_tau"] >= 0
+        env.close()
+
+    def test_non_switch_action_not_interventionist(self):
+        from bvh_rssm.envs.regime_maze import RegimeMaze
+        env = RegimeMaze(shift_rate=0.0, shift_type="adversarial", seed=0)
+        env.reset()
+        for action in [0, 1, 2, 3]:  # non-switch actions
+            _, _, _, _, info = env.step(action)
+            assert not info["is_interventionist"]
+            env.reset()
+        env.close()
+
+    def test_observation_shape(self):
+        obs, _ = self.env.reset()
+        assert obs.shape == self.env.observation_space.shape
+        assert obs.dtype == np.float32
