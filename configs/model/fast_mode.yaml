@@ -1,0 +1,11 @@
+# @package _global_
+# Reduced dimensions for local smoke tests (~2 min on Mac CPU/MPS)
+
+model:
+  h_dim: 128
+  z_cats: 8
+  z_classes: 8         # z_dim = 64
+  n_bins: 64
+  imagination_horizon: 4
+  tau_max_horizon: 64
+  hazard_k: 4

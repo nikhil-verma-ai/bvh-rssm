@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - model: default
+  - training: phase1
+
+experiment:
+  name: bvh_rssm_full
+  seed: 42
+  env: shift_pendulum
+  wandb_project: bvh-rssm
+  resume: true

@@ -1,0 +1,15 @@
+# @package _global_
+
+training:
+  phase: 3
+  steps: 300000
+  batch_size: 16
+  sequence_length: 64
+  learning_rate: 1.0e-4
+  gradient_clip: 100.0
+  checkpoint_every: 30000
+  train_world_model: true
+  train_validity_head: true
+  train_hazard_head: true
+  train_actor_critic: true
+  stop_grad_heads: false

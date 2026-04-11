@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - model: fast_mode
+  - training: phase1
+
+experiment:
+  name: smoke_test
+  seed: 0
+  env: shift_pendulum
+  wandb_project: null
+  resume: false
+
+training:
+  steps: 1000
+  checkpoint_every: 500
