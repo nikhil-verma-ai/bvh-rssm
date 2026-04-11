@@ -14,6 +14,9 @@ build/
 venv/
 env/
 
+# But track .gitkeep in configs/env
+!configs/env/.gitkeep
+
 # PyTorch / ML artifacts
 *.pt
 *.pth
@@ -25,6 +28,10 @@ wandb/
 .vscode/
 .idea/
 *.swp
+
+# Environment / secrets
+.env
+.env.*
 
 # OS
 .DS_Store
