@@ -31,7 +31,7 @@ class ShiftWalker(ShiftWrapper):
     def _is_interventionist(self, action: Any) -> bool:
         try:
             vel = float(self.env.unwrapped.data.qvel[0])
-            return abs(vel) > _SPEED_THRESHOLD
+            return vel > _SPEED_THRESHOLD
         except Exception:
             return False
 

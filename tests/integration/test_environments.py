@@ -166,12 +166,9 @@ class TestRegimeMaze:
         assert obs.dtype == np.float32
 
 
-mujoco = pytest.importorskip("mujoco", reason="mujoco not installed")
-minigrid = pytest.importorskip("minigrid", reason="minigrid not installed")
-
-
 class TestShiftWalker:
     def setup_method(self):
+        pytest.importorskip("mujoco", reason="mujoco not installed")
         from bvh_rssm.envs.shift_walker import ShiftWalker
         self.env = ShiftWalker(shift_rate=10.0, seed=0)
 
@@ -196,6 +193,8 @@ class TestShiftWalker:
 
 class TestShiftMaze:
     def setup_method(self):
+        pytest.importorskip("mujoco", reason="mujoco not installed")
+        pytest.importorskip("minigrid", reason="minigrid not installed")
         from bvh_rssm.envs.shift_maze import ShiftMaze
         self.env = ShiftMaze(shift_rate=10.0, seed=0)
 
@@ -212,6 +211,7 @@ class TestShiftMaze:
 
 class TestSensorDrift:
     def setup_method(self):
+        pytest.importorskip("mujoco", reason="mujoco not installed")
         from bvh_rssm.envs.sensor_drift import SensorDrift
         self.env = SensorDrift(drift_rate=0.01, seed=0)
 
