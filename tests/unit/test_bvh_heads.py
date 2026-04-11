@@ -89,3 +89,63 @@ class TestValidityHead:
         loss = self.head.loss(latent, action, oracle_tau)
         assert torch.isfinite(loss)
         assert loss.item() >= 0.0
+
+
+from bvh_rssm.networks.heads import HazardHead
+
+
+class TestHazardHead:
+    def setup_method(self):
+        self.latent_dim = 48
+        self.n_intervals = 16
+        self.head = HazardHead(latent_dim=self.latent_dim, n_intervals=self.n_intervals)
+
+    def test_hazard_shape_per_source(self):
+        """Each source sub-head returns K hazard values in (0, 1)."""
+        latent = torch.randn(4, self.latent_dim)
+        h_A, h_B, h_C = self.head(latent)
+        for h in [h_A, h_B, h_C]:
+            assert h.shape == (4, self.n_intervals)
+            assert (h > 0).all() and (h < 1).all()
+
+    def test_combined_hazard_shape(self):
+        latent = torch.randn(4, self.latent_dim)
+        h_total = self.head.combined_hazard(latent)
+        assert h_total.shape == (4, self.n_intervals)
+
+    def test_survival_shape(self):
+        latent = torch.randn(4, self.latent_dim)
+        S = self.head.survival(latent)
+        assert S.shape == (4, self.n_intervals)
+
+    def test_survival_decreasing(self):
+        """Survival S(t) must be non-increasing: S(t+1) <= S(t)."""
+        latent = torch.randn(4, self.latent_dim)
+        S = self.head.survival(latent)
+        diffs = S[:, 1:] - S[:, :-1]
+        assert (diffs <= 1e-6).all(), "Survival function must be non-increasing"
+
+    def test_survival_bounded(self):
+        """S(t) must be in (0, 1] for all t."""
+        latent = torch.randn(4, self.latent_dim)
+        S = self.head.survival(latent)
+        assert (S > 0).all() and (S <= 1.0 + 1e-6).all()
+
+    def test_source_b_loss_differentiable(self):
+        """Source B is active in Phase 1/2; loss must be differentiable."""
+        latent = torch.randn(4, self.latent_dim, requires_grad=True)
+        event_times = torch.randint(0, self.n_intervals, (4,))
+        event_occurred = torch.ones(4, dtype=torch.bool)
+        loss = self.head.loss_source_b(latent, event_times, event_occurred)
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert latent.grad is not None
+
+    def test_gradient_flows_combined(self):
+        latent = torch.randn(4, self.latent_dim, requires_grad=True)
+        h_total = self.head.combined_hazard(latent)
+        h_total.sum().backward()
+        assert latent.grad is not None
+
+    def test_n_intervals_stored(self):
+        assert self.head.n_intervals == self.n_intervals

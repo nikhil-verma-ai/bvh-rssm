@@ -254,3 +254,114 @@ class ValidityHead(nn.Module):
         target_twohot = twohot(target_symlog, self.bins)
         log_probs = F.log_softmax(logits, dim=-1)
         return -(target_twohot * log_probs).sum(-1).mean()
+
+
+class HazardHead(nn.Module):
+    """Hazard head (λ-head) — discrete-time survival with competing risks.
+
+    Models the survival function S(t) = P(shift happens after t steps).
+    Three competing-risk sub-heads (Sources A, B, C) each output K independent
+    hazard probabilities h_i ∈ (0, 1).
+
+    Combined hazard: h_total(i) = 1 - ∏_{X∈{A,B,C}} (1 - h_X(i))
+    Survival function: S(t) = ∏_{i=0}^{t-1} (1 - h_total(i))
+
+    Phase 1/2: Source B only — Sources A and C are zero-initialized stubs.
+    Full pycox integration for survival likelihood is in training/losses.py.
+
+    Args:
+        latent_dim: Dimension of [h_t; z_t].
+        n_intervals: Number of discrete time intervals (K=16 per spec).
+        hidden_dim: MLP hidden width.
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        n_intervals: int = 16,
+        hidden_dim: int = 512,
+    ) -> None:
+        super().__init__()
+        self.n_intervals = n_intervals
+        self.source_a = MLP(latent_dim, n_intervals, hidden_dim=hidden_dim, n_layers=2)
+        self.source_b = MLP(latent_dim, n_intervals, hidden_dim=hidden_dim, n_layers=2)
+        self.source_c = MLP(latent_dim, n_intervals, hidden_dim=hidden_dim, n_layers=2)
+        # Initialize sources A and C to near-zero output (stubs for Phase 1/2).
+        # sigmoid(-5) ≈ 0.007 — effectively zero contribution to combined hazard.
+        with torch.no_grad():
+            for m in [self.source_a, self.source_c]:
+                for layer in m.net:
+                    if isinstance(layer, nn.Linear):
+                        layer.weight.data.zero_()
+                        layer.bias.data.fill_(-5.0)
+
+    def forward(self, latent: Tensor):
+        """Return per-source hazard probabilities.
+
+        Args:
+            latent: [*batch, latent_dim]
+
+        Returns:
+            (h_A, h_B, h_C): each [*batch, n_intervals] in (0, 1)
+        """
+        h_A = torch.sigmoid(self.source_a(latent))
+        h_B = torch.sigmoid(self.source_b(latent))
+        h_C = torch.sigmoid(self.source_c(latent))
+        return h_A, h_B, h_C
+
+    def combined_hazard(self, latent: Tensor) -> Tensor:
+        """h_total(i) = 1 - ∏_{X}(1 - h_X(i)).
+
+        Args:
+            latent: [*batch, latent_dim]
+
+        Returns:
+            h_total: [*batch, n_intervals] in (0, 1)
+        """
+        h_A, h_B, h_C = self.forward(latent)
+        return 1.0 - (1.0 - h_A) * (1.0 - h_B) * (1.0 - h_C)
+
+    def survival(self, latent: Tensor) -> Tensor:
+        """S(t) = ∏_{i<t}(1 - h_total(i)) — monotonically non-increasing.
+
+        Args:
+            latent: [*batch, latent_dim]
+
+        Returns:
+            S: [*batch, n_intervals]
+        """
+        h_total = self.combined_hazard(latent)
+        return torch.cumprod(1.0 - h_total, dim=-1)
+
+    def loss_source_b(
+        self,
+        latent: Tensor,
+        event_times: Tensor,
+        event_occurred: Tensor,
+    ) -> Tensor:
+        """BCE-approximated survival loss for Source B (Phase 1/2).
+
+        Builds binary targets: d[b, i] = 1 iff shift occurred at interval i.
+        Censored samples only contribute up to their censoring interval.
+
+        Args:
+            latent: [B, latent_dim]
+            event_times: [B] interval index (0-indexed)
+            event_occurred: [B] bool, True if observed, False if censored
+
+        Returns:
+            Scalar loss.
+        """
+        _, h_B, _ = self.forward(latent)
+        B, K = h_B.shape
+
+        targets = torch.zeros(B, K, device=latent.device)
+        mask = torch.zeros(B, K, device=latent.device)
+        for b in range(B):
+            t = event_times[b].long().clamp(0, K - 1)
+            if event_occurred[b]:
+                targets[b, t] = 1.0
+            mask[b, : t + 1] = 1.0
+
+        bce = F.binary_cross_entropy(h_B, targets, reduction="none")
+        return (bce * mask).sum() / mask.sum().clamp(min=1.0)
