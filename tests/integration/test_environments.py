@@ -164,3 +164,72 @@ class TestRegimeMaze:
         obs, _ = self.env.reset()
         assert obs.shape == self.env.observation_space.shape
         assert obs.dtype == np.float32
+
+
+mujoco = pytest.importorskip("mujoco", reason="mujoco not installed")
+minigrid = pytest.importorskip("minigrid", reason="minigrid not installed")
+
+
+class TestShiftWalker:
+    def setup_method(self):
+        from bvh_rssm.envs.shift_walker import ShiftWalker
+        self.env = ShiftWalker(shift_rate=10.0, seed=0)
+
+    def teardown_method(self):
+        self.env.close()
+
+    def test_check_env(self):
+        check_env(self.env, warn=True)
+
+    def test_info_contract(self):
+        infos = _run_n_steps(self.env)
+        _assert_info_contract(infos)
+
+    def test_friction_changes_on_shift(self):
+        self.env.reset()
+        frictions = set()
+        for _ in range(100):
+            self.env.step(self.env.action_space.sample())
+            frictions.add(self.env.current_friction)
+        assert len(frictions) >= 2
+
+
+class TestShiftMaze:
+    def setup_method(self):
+        from bvh_rssm.envs.shift_maze import ShiftMaze
+        self.env = ShiftMaze(shift_rate=10.0, seed=0)
+
+    def teardown_method(self):
+        self.env.close()
+
+    def test_check_env(self):
+        check_env(self.env, warn=True)
+
+    def test_info_contract(self):
+        infos = _run_n_steps(self.env)
+        _assert_info_contract(infos)
+
+
+class TestSensorDrift:
+    def setup_method(self):
+        from bvh_rssm.envs.sensor_drift import SensorDrift
+        self.env = SensorDrift(drift_rate=0.01, seed=0)
+
+    def teardown_method(self):
+        self.env.close()
+
+    def test_check_env(self):
+        check_env(self.env, warn=True)
+
+    def test_info_contract(self):
+        infos = _run_n_steps(self.env)
+        _assert_info_contract(infos)
+
+    def test_noise_increases_monotonically(self):
+        self.env.reset()
+        noise_levels = []
+        for _ in range(50):
+            self.env.step(self.env.action_space.sample())
+            noise_levels.append(self.env.current_noise_std)
+        # Noise should be non-decreasing until reset
+        assert all(b >= a - 1e-6 for a, b in zip(noise_levels, noise_levels[1:]))
