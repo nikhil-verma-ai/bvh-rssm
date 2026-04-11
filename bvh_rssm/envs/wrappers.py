@@ -58,6 +58,7 @@ class ShiftWrapper(gym.Wrapper):
         self._step_counter: int = 0
         self._next_shift_step: int = self._sample_next_shift()
         self._shift_occurred: bool = False
+        self._gradual_steps_remaining: int = 0
 
     def _sample_next_shift(self) -> int:
         """Sample the step index of the next scheduled shift.
@@ -71,13 +72,22 @@ class ShiftWrapper(gym.Wrapper):
         return self._step_counter + max(1, int(self._rng.exponential(mean_interval)))
 
     @abc.abstractmethod
-    def _apply_shift(self) -> None:
-        """Apply a dynamics parameter shift to the underlying environment."""
+    def _apply_shift(self, progress: float = 1.0) -> None:
+        """Apply a dynamics parameter shift to the underlying environment.
+
+        Args:
+            progress: Interpolation progress in [0.0, 1.0].
+                      1.0 (default) = fully shifted (abrupt/complete).
+                      Values in (0, 1) indicate a partial shift during gradual interpolation.
+                      Subclasses that support gradual shifts should linearly interpolate
+                      their parameters using this value.
+        """
 
     @abc.abstractmethod
     def _is_interventionist(self, action: Any) -> bool:
         """Return True if this action triggers or couples to a shift."""
 
+    @property
     def oracle_tau(self) -> int:
         """Ground-truth steps until next shift from the current step."""
         return max(0, self._next_shift_step - self._step_counter)
@@ -100,11 +110,25 @@ class ShiftWrapper(gym.Wrapper):
 
         # Schedule-based shift (abrupt or gradual)
         if not self._shift_occurred and self._step_counter >= self._next_shift_step:
-            self._apply_shift()
-            self._next_shift_step = self._sample_next_shift()
-            self._shift_occurred = True
+            if self.shift_type == "gradual":
+                # Kick off interpolation window; first step is the trigger step
+                self._gradual_steps_remaining = self.gradual_window
+                self._next_shift_step = self._sample_next_shift()
+                self._shift_occurred = True  # True only on this first trigger step
+            else:
+                # Abrupt (and adversarial already handled above)
+                self._apply_shift()
+                self._next_shift_step = self._sample_next_shift()
+                self._shift_occurred = True
 
-        info["oracle_tau"] = self.oracle_tau()
+        # Gradual interpolation: call _apply_shift on each step of the window
+        if self.shift_type == "gradual" and self._gradual_steps_remaining > 0:
+            # progress goes from 1/gradual_window up to 1.0 over the window
+            progress = 1.0 - (self._gradual_steps_remaining - 1) / self.gradual_window
+            self._apply_shift(progress=progress)
+            self._gradual_steps_remaining -= 1
+
+        info["oracle_tau"] = self.oracle_tau
         info["is_interventionist"] = is_interventionist
         info["shift_occurred"] = self._shift_occurred
 
@@ -117,7 +141,8 @@ class ShiftWrapper(gym.Wrapper):
         self._step_counter = 0
         self._next_shift_step = self._sample_next_shift()
         self._shift_occurred = False
-        info["oracle_tau"] = self.oracle_tau()
+        self._gradual_steps_remaining = 0
+        info["oracle_tau"] = self.oracle_tau
         info["is_interventionist"] = False
         info["shift_occurred"] = False
         return obs, info
