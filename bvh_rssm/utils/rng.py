@@ -1,26 +1,29 @@
 """
-RNG state management for counterfactual trajectory replay.
+RNG state save and restore utilities.
 
-Level 3 counterfactual attribution (Pearl's hierarchy) requires replaying
-a trajectory with the same stochastic z_t samples but a different action.
-This is "abduction" — inferring the latent noise from the factual trajectory
-and holding it fixed under intervention.
+Used by the causal attribution module (Plan 6) to implement Level 3
+counterfactual replay: replay a trajectory with the same stochastic z_t
+samples but a different action sequence.
 
-The implementation stores PyTorch CPU RNG states at each sampling step.
-On replay, we restore the stored state before drawing z_t samples, ensuring
-the same noise realizations regardless of the action taken.
+Critical invariant: restore_rng_states must produce byte-for-byte identical
+torch.randn / np.random.randn calls after restoration.
 
-IMPORTANT: This operates on CPU RNG state only. If using CUDA:
-  - z_t sampling must happen on CPU and be moved to GPU
-  - Or: manage cuda_rng_state separately (extend RNGStateStore if needed)
+Also provides RNGStateStore (Plan 1) for per-step CPU RNG capture during
+trajectory rollout — used to hold z_t noise fixed under action intervention.
 """
 from __future__ import annotations
 
+import contextlib
 from contextlib import contextmanager
-from typing import Generator, List
+from typing import Any, Dict, Generator, List
 
+import numpy as np
 import torch
 
+
+# ---------------------------------------------------------------------------
+# Plan 1 API: RNGStateStore — per-step CPU RNG capture for trajectory replay
+# ---------------------------------------------------------------------------
 
 class RNGStateStore:
     """Captures and restores PyTorch CPU RNG states for deterministic replay."""
@@ -65,24 +68,65 @@ class RNGStateStore:
         return len(self._states)
 
 
-@contextmanager
-def restore_rng_states(
-    states: List[torch.ByteTensor],
-) -> Generator[List[torch.ByteTensor], None, None]:
-    """Context manager that restores the caller's RNG state on exit.
+# ---------------------------------------------------------------------------
+# Plan 4 API: dict-based global state snapshot (torch CPU + numpy + CUDA)
+# ---------------------------------------------------------------------------
 
-    Saves the current RNG state on entry. Yields the provided states list
-    for use inside the block. Restores the pre-entry RNG state on exit
-    regardless of exceptions.
+def save_rng_state() -> Dict[str, Any]:
+    """Snapshot current global RNG state (CPU torch + numpy + CUDA if present).
+
+    Returns:
+        Dict with keys:
+          - 'torch_cpu': ByteTensor from torch.get_rng_state()
+          - 'numpy': tuple from np.random.get_state()
+          - 'torch_cuda': ByteTensor from torch.cuda.get_rng_state() (only if CUDA
+            is available; key absent otherwise)
+    """
+    state: Dict[str, Any] = {
+        "torch_cpu": torch.get_rng_state(),
+        "numpy": np.random.get_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda"] = torch.cuda.get_rng_state()
+    return state
+
+
+def restore_rng_states(state: Dict[str, Any]) -> None:
+    """Restore global RNG state from a previously saved snapshot.
+
+    Restores torch CPU, numpy, and optionally CUDA RNG states so that
+    subsequent calls to torch.randn / np.random.randn produce the same
+    samples as they did immediately after save_rng_state() was called.
 
     Args:
-        states: List of RNG state tensors (from RNGStateStore).
+        state: Dict returned by save_rng_state().
+    """
+    torch.set_rng_state(state["torch_cpu"])
+    np.random.set_state(state["numpy"])
+    if (
+        torch.cuda.is_available()
+        and "torch_cuda" in state
+        and state["torch_cuda"] is not None
+    ):
+        torch.cuda.set_rng_state(state["torch_cuda"])
+
+
+@contextlib.contextmanager
+def rng_snapshot():
+    """Context manager: save RNG state on entry, restore on exit.
+
+    Use to run a stochastic sub-computation and leave the global RNG
+    unchanged afterward:
+
+        with rng_snapshot():
+            cf_latent = rssm.imagine(alt_action, state)  # uses stochastic z
+        # RNG restored — subsequent calls are deterministic w.r.t. outer seed
 
     Yields:
-        The same states list passed in.
+        The saved state dict (from save_rng_state) for optional inspection.
     """
-    saved = torch.get_rng_state()
+    state = save_rng_state()
     try:
-        yield states
+        yield state
     finally:
-        torch.set_rng_state(saved)
+        restore_rng_states(state)

@@ -10,7 +10,12 @@ from bvh_rssm.utils.distributions import (
     straight_through_sample,
     sample_categorical,
 )
-from bvh_rssm.utils.rng import RNGStateStore, restore_rng_states
+from bvh_rssm.utils.rng import (
+    RNGStateStore,
+    save_rng_state,
+    restore_rng_states,
+    rng_snapshot,
+)
 
 __all__ = [
     "symlog",
@@ -22,5 +27,7 @@ __all__ = [
     "straight_through_sample",
     "sample_categorical",
     "RNGStateStore",
+    "save_rng_state",
     "restore_rng_states",
+    "rng_snapshot",
 ]
