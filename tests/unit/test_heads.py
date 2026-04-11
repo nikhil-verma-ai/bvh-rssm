@@ -83,3 +83,43 @@ class TestContinueHead:
         prob = head.probability(latent)
         assert prob.shape == (4, 1)
         assert torch.isfinite(prob).all()
+
+
+from bvh_rssm.networks.actor_critic import Actor, Critic
+
+
+class TestActor:
+    def test_output_shape_continuous(self):
+        actor = Actor(latent_dim=32, action_dim=6, discrete=False)
+        latent = torch.randn(4, 32)
+        mean, log_std = actor(latent)
+        assert mean.shape == (4, 6)
+        assert log_std.shape == (4, 6)
+
+    def test_output_shape_discrete(self):
+        actor = Actor(latent_dim=32, action_dim=4, discrete=True)
+        latent = torch.randn(4, 32)
+        logits = actor(latent)
+        assert logits.shape == (4, 4)
+
+    def test_gradient_flows(self):
+        actor = Actor(latent_dim=16, action_dim=4, discrete=False)
+        latent = torch.randn(2, 16, requires_grad=True)
+        mean, _ = actor(latent)
+        mean.sum().backward()
+        assert latent.grad is not None
+
+
+class TestCritic:
+    def test_output_shape(self):
+        critic = Critic(latent_dim=32, n_bins=64)
+        latent = torch.randn(4, 32)
+        logits = critic(latent)
+        assert logits.shape == (4, 64)
+
+    def test_gradient_flows(self):
+        critic = Critic(latent_dim=16, n_bins=32)
+        latent = torch.randn(2, 16, requires_grad=True)
+        logits = critic(latent)
+        logits.sum().backward()
+        assert latent.grad is not None
