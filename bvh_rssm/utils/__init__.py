@@ -6,6 +6,10 @@ from bvh_rssm.utils.math import (
     twohot_decode,
     unimix,
 )
+from bvh_rssm.utils.distributions import (
+    straight_through_sample,
+    sample_categorical,
+)
 
 __all__ = [
     "symlog",
@@ -14,4 +18,6 @@ __all__ = [
     "twohot",
     "twohot_decode",
     "unimix",
+    "straight_through_sample",
+    "sample_categorical",
 ]
