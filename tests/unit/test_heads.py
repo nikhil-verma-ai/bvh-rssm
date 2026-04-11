@@ -125,6 +125,13 @@ class TestActor:
         mean.sum().backward()
         assert latent.grad is not None
 
+    def test_gradient_flows_discrete(self):
+        actor = Actor(latent_dim=16, action_dim=4, discrete=True)
+        latent = torch.randn(2, 16, requires_grad=True)
+        logits = actor(latent)
+        logits.sum().backward()
+        assert latent.grad is not None
+
 
 class TestCritic:
     def test_output_shape(self):
@@ -132,6 +139,7 @@ class TestCritic:
         latent = torch.randn(4, 32)
         logits = critic(latent)
         assert logits.shape == (4, 64)
+        assert critic.n_bins == 64
 
     def test_gradient_flows(self):
         critic = Critic(latent_dim=16, n_bins=32)

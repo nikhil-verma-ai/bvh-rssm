@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from bvh_rssm.networks.common import MLP
+from bvh_rssm.networks.common import MLP, LayerNormMLP
 
 _LOG_STD_MIN = -5.0
 _LOG_STD_MAX = 2.0
@@ -49,7 +49,7 @@ class Actor(nn.Module):
         self.discrete = discrete
         self.action_dim = action_dim
         out_dim = action_dim if discrete else action_dim * 2  # mean + log_std
-        self.mlp = MLP(latent_dim, out_dim, hidden_dim=hidden_dim, n_layers=3)
+        self.mlp = LayerNormMLP(latent_dim, out_dim, hidden_dim=hidden_dim, n_layers=3)
 
     def forward(
         self, latent: Tensor
@@ -68,6 +68,7 @@ class Actor(nn.Module):
         if self.discrete:
             return out
         mean, log_std = out.chunk(2, dim=-1)
+        # TODO(plan5): consider softclamp 5*tanh(x/5) to avoid zero gradients at boundary
         log_std = log_std.clamp(_LOG_STD_MIN, _LOG_STD_MAX)
         return mean, log_std
 
@@ -92,7 +93,7 @@ class Critic(nn.Module):
     ) -> None:
         super().__init__()
         self.n_bins = n_bins
-        self.mlp = MLP(latent_dim, n_bins, hidden_dim=hidden_dim, n_layers=3)
+        self.mlp = LayerNormMLP(latent_dim, n_bins, hidden_dim=hidden_dim, n_layers=3)
 
     def forward(self, latent: Tensor) -> Tensor:
         """Return raw value distribution logits.
