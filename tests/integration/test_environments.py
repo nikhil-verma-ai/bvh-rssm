@@ -80,3 +80,37 @@ class TestShiftPendulum:
         env.close()
         # Should see at least 2 different gravity values
         assert len(gravities_seen) >= 2
+
+
+class TestTradingRegime:
+    def setup_method(self):
+        from bvh_rssm.envs.trading_regime import TradingRegime
+        self.env = TradingRegime(shift_rate=20.0, seed=0)
+
+    def teardown_method(self):
+        self.env.close()
+
+    def test_check_env(self):
+        check_env(self.env, warn=True)
+
+    def test_info_contract(self):
+        infos = _run_n_steps(self.env)
+        _assert_info_contract(infos)
+
+    def test_observation_space(self):
+        obs, _ = self.env.reset()
+        assert obs.shape == self.env.observation_space.shape
+        assert obs.dtype == np.float32
+
+    def test_action_space_is_discrete(self):
+        import gymnasium as gym
+        assert isinstance(self.env.action_space, gym.spaces.Discrete)
+        assert self.env.action_space.n == 3  # buy, sell, hold
+
+    def test_regime_shifts_occur(self):
+        infos = _run_n_steps(self.env, n=200)
+        assert any(info["shift_occurred"] for info in infos)
+
+    def test_no_adversarial_trigger(self):
+        infos = _run_n_steps(self.env, n=100)
+        assert all(not info["is_interventionist"] for info in infos)
