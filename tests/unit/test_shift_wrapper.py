@@ -76,18 +76,21 @@ class TestShiftWrapperInfoContract:
         assert env.observation_space.shape == (1,)
 
     def test_oracle_tau_decrements_toward_shift(self):
+        """oracle_tau should decrease by 1 each step until a shift fires."""
         env = _ShiftCounterEnv(shift_rate=10.0, seed=42)
         env.reset()
         tau_values = []
-        for _ in range(20):
+        for _ in range(15):
             _, _, _, _, info = env.step(0)
             tau_values.append(info["oracle_tau"])
             if info["shift_occurred"]:
                 break
-        # tau should decrease before a shift
-        decreasing_segment = tau_values[:tau_values.index(max(tau_values)) + 1]
-        if len(decreasing_segment) > 1:
-            assert all(b <= a for a, b in zip(decreasing_segment, decreasing_segment[1:]))
+        # Collect values before the shift step
+        shift_idx = next((i for i, v in enumerate(tau_values) if v == 0), len(tau_values))
+        pre_shift = tau_values[:shift_idx]
+        if len(pre_shift) > 1:
+            # Each step should decrement tau by exactly 1
+            assert all(b == a - 1 for a, b in zip(pre_shift, pre_shift[1:]))
 
 
 class TestShiftWrapperAbrupt:
@@ -135,11 +138,14 @@ class TestShiftWrapperAdversarial:
             assert not info["shift_occurred"]
             assert not info["is_interventionist"]
 
-    def test_oracle_tau_zero_when_adversarial_shift_triggered(self):
+    def test_oracle_tau_nonnegative_after_adversarial_shift(self):
+        """After an adversarial shift, oracle_tau reflects time to next scheduled shift."""
         env = _ShiftCounterEnv(shift_rate=0.0, shift_type="adversarial", seed=0)
         env.reset()
         _, _, _, _, info = env.step(1)
+        # With shift_rate=0, next scheduled shift is int(1e9) away
         assert info["oracle_tau"] >= 0
+        assert isinstance(info["oracle_tau"], int)
 
 
 class TestShiftWrapperReset:

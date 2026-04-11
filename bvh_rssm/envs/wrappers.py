@@ -50,6 +50,13 @@ class ShiftWrapper(gym.Wrapper):
             gradual_window: Steps over which to interpolate for gradual shifts.
             seed: RNG seed for shift schedule reproducibility.
         """
+        _VALID_SHIFT_TYPES = {"abrupt", "gradual", "adversarial"}
+        if shift_type not in _VALID_SHIFT_TYPES:
+            raise ValueError(f"shift_type must be one of {_VALID_SHIFT_TYPES!r}, got {shift_type!r}")
+        if shift_type == "gradual" and gradual_window < 1:
+            raise ValueError(
+                f"gradual_window must be >= 1 for gradual shifts, got {gradual_window!r}"
+            )
         super().__init__(env)
         self.shift_rate = shift_rate
         self.shift_type = shift_type
@@ -101,25 +108,27 @@ class ShiftWrapper(gym.Wrapper):
         # Adversarial: check if action triggers a shift BEFORE env step
         if self.shift_type == "adversarial" and self._is_interventionist(action):
             self._apply_shift()
-            self._next_shift_step = self._sample_next_shift()
             self._shift_occurred = True
             is_interventionist = True
+            # Only resample if scheduled shift was not ALSO pending this step.
+            # If it was pending, let the schedule block below fire and resample.
+            if self._step_counter < self._next_shift_step:
+                self._next_shift_step = self._sample_next_shift()
 
         obs, reward, terminated, truncated, info = self.env.step(action)
         self._step_counter += 1
 
-        # Schedule-based shift (abrupt or gradual)
-        if not self._shift_occurred and self._step_counter >= self._next_shift_step:
+        # Schedule-based shift (abrupt or gradual) — can fire alongside adversarial
+        if self._step_counter >= self._next_shift_step:
             if self.shift_type == "gradual":
                 # Kick off interpolation window; first step is the trigger step
                 self._gradual_steps_remaining = self.gradual_window
-                self._next_shift_step = self._sample_next_shift()
                 self._shift_occurred = True  # True only on this first trigger step
             else:
                 # Abrupt (and adversarial already handled above)
                 self._apply_shift()
-                self._next_shift_step = self._sample_next_shift()
                 self._shift_occurred = True
+            self._next_shift_step = self._sample_next_shift()
 
         # Gradual interpolation: call _apply_shift on each step of the window
         if self.shift_type == "gradual" and self._gradual_steps_remaining > 0:
@@ -137,6 +146,13 @@ class ShiftWrapper(gym.Wrapper):
     def reset(
         self, *, seed: Optional[int] = None, options: Optional[Dict] = None
     ) -> Tuple[Any, Dict[str, Any]]:
+        """Reset the environment and wrapper state for a new episode.
+
+        NOTE: The wrapper's internal RNG (_rng) is NOT re-seeded on reset.
+        Each episode draws from the same RNG stream, producing different shift
+        schedules across episodes. To control the full shift sequence, pass
+        seed= to __init__ only.
+        """
         obs, info = self.env.reset(seed=seed, options=options)
         self._step_counter = 0
         self._next_shift_step = self._sample_next_shift()
