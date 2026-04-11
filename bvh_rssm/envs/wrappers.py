@@ -88,6 +88,11 @@ class ShiftWrapper(gym.Wrapper):
                       Values in (0, 1) indicate a partial shift during gradual interpolation.
                       Subclasses that support gradual shifts should linearly interpolate
                       their parameters using this value.
+
+        NOTE: In adversarial mode when a scheduled shift coincides on the same step,
+        this method may be called twice in one step() invocation. Subclasses must
+        handle double invocation gracefully (e.g. advance state on each call, or
+        use idempotent parameter snapping with no side effects on repeated calls).
         """
 
     @abc.abstractmethod

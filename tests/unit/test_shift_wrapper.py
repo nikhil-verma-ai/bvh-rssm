@@ -147,6 +147,17 @@ class TestShiftWrapperAdversarial:
         assert info["oracle_tau"] >= 0
         assert isinstance(info["oracle_tau"], int)
 
+    def test_adversarial_and_scheduled_both_fire(self):
+        """When adversarial fires on the same step as a scheduled shift, both apply."""
+        env = _ShiftCounterEnv(shift_rate=0.0, shift_type="adversarial", seed=0)
+        env.reset()
+        # Force the scheduled shift to be due immediately by setting _next_shift_step
+        env._next_shift_step = 0  # scheduled shift is already overdue
+        initial_count = env.shift_count
+        env.step(1)  # action=1 is interventionist, triggers adversarial
+        # Both the adversarial AND the scheduled shift should have fired
+        assert env.shift_count == initial_count + 2
+
 
 class TestShiftWrapperReset:
     def test_reset_resets_step_counter(self):
@@ -253,3 +264,17 @@ class TestShiftWrapperGradual:
         # shift_count may increase only if a new scheduled shift fires, not from
         # the previous window — we just verify the internal counter was cleared.
         assert env._gradual_steps_remaining == 0 or env.shift_count >= count_after_reset
+
+
+class TestShiftWrapperValidation:
+    def test_invalid_shift_type_raises(self):
+        with pytest.raises(ValueError, match="shift_type must be one of"):
+            _ShiftCounterEnv(shift_type="invalid")
+
+    def test_gradual_window_zero_raises(self):
+        with pytest.raises(ValueError, match="gradual_window must be >= 1"):
+            _ShiftCounterEnv(shift_type="gradual", gradual_window=0)
+
+    def test_gradual_window_negative_raises(self):
+        with pytest.raises(ValueError, match="gradual_window must be >= 1"):
+            _ShiftCounterEnv(shift_type="gradual", gradual_window=-5)
