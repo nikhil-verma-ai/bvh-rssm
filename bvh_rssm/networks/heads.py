@@ -157,3 +157,100 @@ class ContinueHead(nn.Module):
         """
         logits = self.forward(latent)
         return F.binary_cross_entropy_with_logits(logits, continue_flag)
+
+
+class ValidityHead(nn.Module):
+    """Validity horizon head (τ-head).
+
+    Predicts the number of steps until the world model's imagined latent
+    diverges from the posterior by more than ε nats (KL threshold).
+
+    Input: concatenated latent [h_t; z_t] + action embedding.
+    Output: categorical distribution over n_bins via twohot encoding.
+
+    stop_grad controls whether gradients flow back into the RSSM latent:
+    - Phase 2: stop_grad=True (heads train on frozen world model)
+    - Phase 3: stop_grad=False (joint fine-tuning)
+
+    Args:
+        latent_dim: Dimension of [h_t; z_t].
+        action_dim: Action space dimension.
+        n_bins: Number of twohot bins for horizon distribution (default 255).
+        embed_dim: Action embedding dimension.
+        hidden_dim: MLP hidden width.
+        max_horizon: Maximum predictable horizon in steps (default 1000).
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        action_dim: int,
+        n_bins: int = 255,
+        embed_dim: int = 64,
+        hidden_dim: int = 512,
+        max_horizon: int = 1000,
+    ) -> None:
+        super().__init__()
+        self.n_bins = n_bins
+        self.action_embed = MLP(action_dim, embed_dim, hidden_dim=hidden_dim, n_layers=1)
+        self.mlp = MLP(latent_dim + embed_dim, n_bins, hidden_dim=hidden_dim, n_layers=2)
+        # Bins in symlog space over [0, symlog(max_horizon)]
+        symlog_hi = symlog(torch.tensor(float(max_horizon))).item()
+        self.register_buffer(
+            "bins",
+            symlog_bins(n_bins, lo=0.0, hi=float(symlog_hi))
+        )
+
+    def forward(self, latent: Tensor, action: Tensor, stop_grad: bool = False) -> Tensor:
+        """Return raw logits over horizon bins.
+
+        Args:
+            latent: [*batch, latent_dim]
+            action: [*batch, action_dim]
+            stop_grad: If True, detach latent before processing (Phase 2).
+
+        Returns:
+            logits: [*batch, n_bins]
+        """
+        if stop_grad:
+            latent = latent.detach()
+        a_embed = self.action_embed(action)
+        x = torch.cat([latent, a_embed], dim=-1)
+        return self.mlp(x)
+
+    def decode(self, logits: Tensor) -> Tensor:
+        """Decode logits to expected τ̂ in steps (original scale, >= 0).
+
+        Args:
+            logits: [*batch, n_bins]
+
+        Returns:
+            tau_hat: [*batch]
+        """
+        probs = logits.softmax(-1)
+        tau_symlog = twohot_decode(probs, self.bins)
+        return symexp(tau_symlog).clamp(min=0.0)
+
+    def loss(
+        self,
+        latent: Tensor,
+        action: Tensor,
+        oracle_tau: Tensor,
+        stop_grad: bool = False,
+    ) -> Tensor:
+        """Twohot cross-entropy loss against oracle τ*.
+
+        Args:
+            latent: [B, latent_dim]
+            action: [B, action_dim]
+            oracle_tau: [B] ground-truth steps-to-shift
+            stop_grad: If True, detach latent (Phase 2 training mode).
+
+        Returns:
+            Scalar loss.
+        """
+        logits = self.forward(latent, action, stop_grad=stop_grad)
+        target_symlog = symlog(oracle_tau.float())
+        target_twohot = twohot(target_symlog, self.bins)
+        log_probs = F.log_softmax(logits, dim=-1)
+        return -(target_twohot * log_probs).sum(-1).mean()
