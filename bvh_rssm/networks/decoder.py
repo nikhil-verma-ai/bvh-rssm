@@ -17,7 +17,7 @@ from bvh_rssm.utils import symexp
 
 
 class Decoder(nn.Module):
-    """Observation decoder: latent [h; z] → (obs_mean, obs_log_std).
+    """Observation decoder: latent [h; z] → obs_mean (original scale).
 
     Predicts a Gaussian observation distribution. Mean in symlog space,
     symexp applied to recover original scale. Log-std is a single scalar
@@ -46,29 +46,25 @@ class Decoder(nn.Module):
         )
         self.obs_dim = obs_dim
 
-    def forward(self, latent: Tensor) -> Tuple[Tensor, Tensor]:
-        """Decode latent to observation distribution parameters.
+    def forward(self, latent: Tensor) -> Tensor:
+        """Decode latent to observation mean in original scale (for rendering).
+
+        Returns only the mean with symexp applied to recover original scale.
+        Callers who need distribution parameters (mean_symlog, log_std) for
+        training loss computation should use decode_symlog() instead.
 
         Args:
             latent: Concatenated [h_t; z_t] of shape [*batch, latent_dim].
 
         Returns:
-            (mean, log_std) each of shape [*batch, obs_dim].
-            mean is in original observation scale (symexp applied).
-            log_std is clamped to [-5, 5] for numerical stability.
-
-        Note: For training loss computation, use decode_symlog() which returns
-        mean in symlog space. Use this method (forward) only for rendering
-        where original scale is needed.
+            mean of shape [*batch, obs_dim] in original observation scale
+            (symexp applied). Do NOT pair this with log_std from decode_symlog()
+            to construct a Normal — the two are in different scales.
         """
         out = self.mlp(latent)                            # [*batch, obs_dim+1]
         mean_symlog = out[..., :self.obs_dim]             # [*batch, obs_dim]
-        log_std_scalar = out[..., self.obs_dim:]          # [*batch, 1]
-        log_std = log_std_scalar.expand(
-            *out.shape[:-1], self.obs_dim
-        ).clamp(-5.0, 5.0)                               # [*batch, obs_dim]
         mean = symexp(mean_symlog)                        # recover original scale
-        return mean, log_std
+        return mean
 
     def decode_symlog(self, latent: Tensor) -> Tuple[Tensor, Tensor]:
         """Decode latent to symlog-space distribution parameters (for loss computation).

@@ -47,12 +47,12 @@ class TestDecoder:
 
     def test_output_shape(self):
         latent = torch.randn(4, self.h_dim + self.z_dim)
-        mean, log_std = self.decoder(latent)
+        mean = self.decoder(latent)
         assert mean.shape == (4, self.obs_dim)
 
     def test_gradient_flows(self):
         latent = torch.randn(2, self.h_dim + self.z_dim, requires_grad=True)
-        mean, log_std = self.decoder(latent)
+        mean = self.decoder(latent)
         mean.sum().backward()
         assert latent.grad is not None
 
@@ -75,7 +75,7 @@ class TestDecoder:
     def test_symexp_applied_to_output(self):
         """Decoder applies symexp to mean output to recover original scale."""
         latent = torch.randn(1, self.h_dim + self.z_dim)
-        mean, _ = self.decoder(latent)
+        mean = self.decoder(latent)
         assert torch.isfinite(mean).all()
 
 
@@ -106,6 +106,5 @@ class TestEncoderDecoderWithRSSM:
         h = torch.randn(2, h_dim)
         z = torch.randn(2, z_dim)
         latent = torch.cat([h, z], dim=-1)
-        mean, log_std = decoder(latent)
+        mean = decoder(latent)
         assert mean.shape == (2, obs_dim)
-        assert log_std.shape == (2, obs_dim)
