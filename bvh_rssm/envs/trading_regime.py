@@ -14,6 +14,7 @@ discrete actions, hidden Markov structure — a natural POMDP.
 """
 from __future__ import annotations
 
+import collections
 from typing import Any, Optional
 
 import gymnasium as gym
@@ -32,18 +33,23 @@ _PRICE_WINDOW = 20  # number of past prices in observation
 class _TradingEnv(gym.Env):
     """Base trading environment with HMM-driven price dynamics."""
 
-    observation_space = spaces.Box(
-        low=-np.inf, high=np.inf, shape=(_PRICE_WINDOW,), dtype=np.float32
-    )
-    action_space = spaces.Discrete(3)  # 0=hold, 1=buy, 2=sell
-
     def __init__(self, seed: int = 0) -> None:
         super().__init__()
+        # Instance-level spaces (not class-level) so each env instance owns its space.
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(_PRICE_WINDOW,), dtype=np.float32
+        )
+        self.action_space = spaces.Discrete(3)  # 0=hold, 1=buy, 2=sell
+
         self._rng = np.random.default_rng(seed)
         self._price: float = 100.0
         self._regime: int = 0
         self._position: int = 0  # -1=short, 0=flat, 1=long
-        self._price_history: list = [100.0] * _PRICE_WINDOW
+        # deque with maxlen avoids O(n) pop(0); maxlen=_PRICE_WINDOW+1 keeps
+        # exactly the prices needed for _PRICE_WINDOW log-return differences.
+        self._price_history: collections.deque = collections.deque(
+            [100.0] * _PRICE_WINDOW, maxlen=_PRICE_WINDOW + 1
+        )
         self._transition_matrix = self._default_transition()
         self._step_count: int = 0
         self._max_steps: int = 500
@@ -94,29 +100,40 @@ class _TradingEnv(gym.Env):
         self._price = 100.0
         self._regime = 0
         self._position = 0
-        self._price_history = [100.0] * _PRICE_WINDOW
+        self._price_history = collections.deque(
+            [100.0] * _PRICE_WINDOW, maxlen=_PRICE_WINDOW + 1
+        )
+        # Reset transition matrix to default so episodes are independent.
+        self._transition_matrix = self._default_transition()
         self._step_count = 0
         return self._get_obs(), {}
 
     def step(self, action: int):
         self._step_regime()
         new_price = self._step_price()
+        # deque.append is O(1); maxlen enforces the window bound automatically.
         self._price_history.append(new_price)
-        if len(self._price_history) > _PRICE_WINDOW + 1:
-            self._price_history.pop(0)
 
-        # Simple P&L: reward based on position and price change
-        prev_price = self._price_history[-2]
+        # Capture price change BEFORE updating position to prevent look-ahead.
+        # Reward must reflect P&L from the position held ENTERING this step,
+        # not the position chosen IN this step.
+        prev_price = list(self._price_history)[-2]
         price_change = (new_price - prev_price) / (prev_price + 1e-8)
+
+        # Record position that was active when this price move occurred.
+        prev_position = self._position
 
         if action == 1:    # buy
             self._position = 1
         elif action == 2:  # sell
             self._position = -1
-        else:              # hold
+        else:              # hold — position unchanged
             pass
 
-        reward = float(self._position * price_change)
+        # Use prev_position: the position held before this action was taken.
+        # Using self._position here would be a look-ahead exploit allowing a
+        # memoryless policy to achieve non-trivial positive expected reward.
+        reward = float(prev_position * price_change)
         self._step_count += 1
         terminated = self._step_count >= self._max_steps
 
