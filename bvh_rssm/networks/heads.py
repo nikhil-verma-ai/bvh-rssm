@@ -21,7 +21,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from bvh_rssm.networks.common import MLP
-from bvh_rssm.utils import symlog, symexp, twohot, twohot_decode
+from bvh_rssm.utils import symlog, symexp, symlog_bins, twohot, twohot_decode
 
 
 class RewardHead(nn.Module):
@@ -31,10 +31,15 @@ class RewardHead(nn.Module):
     This decouples gradient magnitude from reward scale — DreamerV3's key
     robustness trick for multi-domain training.
 
+    Bin centers are stored as a registered buffer so they automatically follow
+    the module to the correct device via `.to(device)` / `.cuda()`.
+
     Args:
         latent_dim: Dimension of concatenated [h_t; z_t].
         n_bins: Number of twohot bins (DreamerV3 default: 255).
         hidden_dim: MLP hidden width.
+        bins: Optional pre-constructed [n_bins] bin-center tensor. When None
+            (default) bins are created via ``symlog_bins(n_bins)``.
     """
 
     def __init__(
@@ -42,10 +47,15 @@ class RewardHead(nn.Module):
         latent_dim: int,
         n_bins: int = 255,
         hidden_dim: int = 512,
+        bins: Tensor | None = None,
     ) -> None:
         super().__init__()
         self.n_bins = n_bins
         self.mlp = MLP(latent_dim, n_bins, hidden_dim=hidden_dim, n_layers=2)
+        self.register_buffer(
+            'bins',
+            bins if bins is not None else symlog_bins(n_bins),
+        )
 
     def forward(self, latent: Tensor) -> Tensor:
         """Return raw logits over reward bins.
@@ -58,34 +68,38 @@ class RewardHead(nn.Module):
         """
         return self.mlp(latent)
 
-    def decode(self, logits: Tensor, bins: Tensor) -> Tensor:
+    def decode(self, logits: Tensor) -> Tensor:
         """Decode logits to expected reward in original scale.
+
+        Uses ``self.bins`` (registered buffer) for bin centers; no explicit
+        device management required by the caller.
 
         Args:
             logits: [*batch, n_bins]
-            bins: [n_bins] bin centers in symlog space
 
         Returns:
             reward: [*batch] in original scale (symexp applied)
         """
         probs = logits.softmax(-1)
-        reward_symlog = twohot_decode(probs, bins)
+        reward_symlog = twohot_decode(probs, self.bins)
         return symexp(reward_symlog)
 
-    def loss(self, latent: Tensor, target_reward: Tensor, bins: Tensor) -> Tensor:
+    def loss(self, latent: Tensor, target_reward: Tensor) -> Tensor:
         """Compute twohot categorical cross-entropy loss.
+
+        Uses ``self.bins`` (registered buffer) for bin centers; no explicit
+        device management required by the caller.
 
         Args:
             latent: [B, latent_dim]
             target_reward: [B] raw reward values
-            bins: [n_bins] symlog-space bin centers
 
         Returns:
             Scalar loss.
         """
         logits = self.forward(latent)                         # [B, n_bins]
         target_symlog = symlog(target_reward)                 # [B]
-        target_twohot = twohot(target_symlog, bins)           # [B, n_bins]
+        target_twohot = twohot(target_symlog, self.bins)      # [B, n_bins]
         log_probs = F.log_softmax(logits, dim=-1)             # [B, n_bins]
         return -(target_twohot * log_probs).sum(-1).mean()
 
@@ -119,13 +133,17 @@ class ContinueHead(nn.Module):
     def probability(self, latent: Tensor) -> Tensor:
         """Return continuation probability (sigmoid of logits).
 
+        The trailing singleton dimension produced by the linear output is
+        squeezed so the returned tensor shape matches [*batch], consistent
+        with ``RewardHead.decode``.
+
         Args:
             latent: [*batch, latent_dim]
 
         Returns:
-            prob: [*batch, 1] in [0, 1]
+            prob: [*batch] in [0, 1]
         """
-        return torch.sigmoid(self.forward(latent))
+        return torch.sigmoid(self.forward(latent)).squeeze(-1)
 
     def loss(self, latent: Tensor, continue_flag: Tensor) -> Tensor:
         """Binary cross-entropy loss.

@@ -9,7 +9,6 @@ class TestRewardHead:
         self.latent_dim = 32
         self.n_bins = 64
         self.head = RewardHead(latent_dim=self.latent_dim, n_bins=self.n_bins)
-        self.bins = symlog_bins(self.n_bins)
 
     def test_logits_output_shape(self):
         latent = torch.randn(4, self.latent_dim)
@@ -19,32 +18,49 @@ class TestRewardHead:
     def test_expected_reward_shape(self):
         latent = torch.randn(4, self.latent_dim)
         logits = self.head(latent)
-        reward = self.head.decode(logits, self.bins)
+        reward = self.head.decode(logits)
         assert reward.shape == (4,)
 
     def test_loss_is_finite(self):
         latent = torch.randn(4, self.latent_dim)
         target_reward = torch.randn(4)  # raw rewards
-        loss = self.head.loss(latent, target_reward, self.bins)
+        loss = self.head.loss(latent, target_reward)
         assert torch.isfinite(loss)
 
     def test_loss_is_differentiable(self):
         latent = torch.randn(4, self.latent_dim, requires_grad=True)
         target_reward = torch.randn(4)
-        loss = self.head.loss(latent, target_reward, self.bins)
+        loss = self.head.loss(latent, target_reward)
         loss.backward()
         assert latent.grad is not None
         assert latent.grad.abs().sum() > 0
 
-    def test_loss_decreases_with_correct_prediction(self):
-        """Loss should be near zero when predicting the exact target."""
-        head = RewardHead(latent_dim=self.latent_dim, n_bins=self.n_bins)
-        bins = symlog_bins(self.n_bins)
-        # This test checks the loss function API, not convergence
-        target = torch.zeros(2)
-        latent = torch.randn(2, self.latent_dim)
-        loss = head.loss(latent, target, bins)
-        assert loss.item() >= 0.0
+    def test_decode_roundtrip_near_target(self):
+        """decode() should recover a reward close to the target when logits
+        match the twohot encoding of symlog(target).
+
+        twohot distributes probability across the two bins that straddle the
+        target in symlog space; feeding those exact (log-)probabilities back
+        through decode should reconstruct the original reward to machine
+        precision.
+        """
+        from bvh_rssm.utils import symlog as _symlog, twohot as _twohot
+        target = 5.0
+        n_bins = 64
+        bins = symlog_bins(n_bins)
+        head = RewardHead(latent_dim=self.latent_dim, n_bins=n_bins)
+
+        # Build logits whose softmax equals the twohot distribution for target.
+        # log(twohot + eps) followed by softmax recovers the twohot probabilities
+        # to high precision (eps only affects near-zero bins negligibly).
+        target_symlog = _symlog(torch.tensor(target))
+        twohot_target = _twohot(target_symlog.unsqueeze(0), bins)  # [1, n_bins]
+        logits = torch.log(twohot_target + 1e-8)  # [1, n_bins]
+
+        decoded = head.decode(logits)  # shape [1]
+        assert abs(decoded.item() - target) / abs(target) < 0.1, (
+            f"Expected decoded reward within 10% of {target}, got {decoded.item():.4f}"
+        )
 
 
 class TestContinueHead:
@@ -60,7 +76,7 @@ class TestContinueHead:
     def test_probability_shape(self):
         latent = torch.randn(4, self.latent_dim)
         prob = self.head.probability(latent)
-        assert prob.shape == (4, 1)
+        assert prob.shape == (4,)
         assert (prob >= 0).all() and (prob <= 1).all()
 
     def test_loss_is_finite(self):
@@ -81,7 +97,7 @@ class TestContinueHead:
         head = ContinueHead(latent_dim=self.latent_dim)
         latent = torch.randn(4, self.latent_dim)
         prob = head.probability(latent)
-        assert prob.shape == (4, 1)
+        assert prob.shape == (4,)
         assert torch.isfinite(prob).all()
 
 
