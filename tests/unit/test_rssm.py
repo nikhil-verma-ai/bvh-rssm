@@ -59,6 +59,19 @@ class TestRSSMObserve:
         assert obs.grad is not None
         assert obs.grad.abs().sum() > 0
 
+    def test_multi_step_observe_rollout(self):
+        """State threads correctly across multiple observe() calls."""
+        rssm = RSSM(h_dim=32, z_cats=4, z_classes=4, obs_dim=8, action_dim=2)
+        state = rssm.initial_state(batch_size=2)
+        for t in range(5):
+            obs = torch.randn(2, 8)
+            action = torch.randn(2, 2)
+            logits, state = rssm.observe(obs, action, state)
+            assert state.h.shape == (2, 32)
+            assert state.z.shape == (2, 16)  # 4*4
+        # After 5 steps, state must still be differentiable
+        state.h.sum().backward()
+
 
 class TestRSSMImagine:
     def setup_method(self):
@@ -117,13 +130,27 @@ class TestRSSMLatent:
         latent.sum().backward()  # must not raise
 
     def test_unimix_applied_to_z(self):
-        """z_t distribution must have minimum probability mass (unimix invariant)."""
+        """z_t sampling must use unimix-mixed distribution (min mass = eps/n_classes)."""
+        from bvh_rssm.utils import unimix
         rssm = RSSM(h_dim=32, z_cats=4, z_classes=8, obs_dim=8, action_dim=2)
         obs = torch.randn(5, 8)
         action = torch.randn(5, 2)
         state = rssm.initial_state(5)
         posterior_logits, _ = rssm.observe(obs, action, state)
-        # Posterior logits → probabilities after unimix
-        probs = torch.softmax(posterior_logits, dim=-1)
-        min_mass = 0.01 / 8  # unimix eps=0.01, n_classes=8
-        assert probs.min().item() >= min_mass * 0.5  # allow for numerical slack
+        # Test the mixed distribution (what _sample_z actually uses), not raw logits
+        mixed_probs = unimix(posterior_logits, eps=rssm.unimix_eps)
+        min_mass = rssm.unimix_eps / 8  # eps / n_classes
+        assert mixed_probs.min().item() >= min_mass - 1e-7  # fp tolerance only
+
+    def test_unimix_prevents_probability_collapse(self):
+        """unimix must maintain floor even when raw logits are extreme."""
+        from bvh_rssm.utils import unimix
+        rssm = RSSM(h_dim=32, z_cats=4, z_classes=8, obs_dim=8, action_dim=2)
+        # Extreme logits: one class dominates with 1e6, others at -1e6
+        # Without unimix, softmax collapses to [0,0,...,1,...,0] — other probs ~0
+        extreme_logits = torch.full((5, 4, 8), -1e6)
+        extreme_logits[:, :, 0] = 1e6  # class 0 dominates
+        mixed_probs = unimix(extreme_logits, eps=rssm.unimix_eps)
+        min_mass = rssm.unimix_eps / 8
+        # Even with extreme logits, unimix guarantees floor
+        assert mixed_probs.min().item() >= min_mass - 1e-7

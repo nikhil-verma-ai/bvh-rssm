@@ -27,7 +27,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from bvh_rssm.networks.common import MLP
-from bvh_rssm.utils import unimix, straight_through_sample
+from bvh_rssm.utils import unimix, straight_through_sample, sample_categorical
 
 # State namedtuple used everywhere in the codebase
 State = namedtuple("State", ["h", "z"])
@@ -93,7 +93,10 @@ class RSSM(nn.Module):
             State with h=[B, h_dim] zeros and z=[B, z_dim] zeros.
         """
         if device is None:
-            device = next(self.parameters()).device
+            try:
+                device = next(self.parameters()).device
+            except StopIteration:
+                device = torch.device("cpu")
         return State(
             h=torch.zeros(batch_size, self.h_dim, device=device),
             z=torch.zeros(batch_size, self.z_dim, device=device),
@@ -108,17 +111,29 @@ class RSSM(nn.Module):
     def _sample_z(self, logits: Tensor) -> Tensor:
         """Sample z_t from categorical logits with straight-through gradient.
 
+        During training: stochastic sampling (multinomial) for posterior diversity.
+        During eval: deterministic argmax for reproducible inference.
+        Both paths use straight-through gradient through the one-hot sample.
+
+        Unimix (eps=0.01) is applied to the distribution before sampling to
+        prevent log(0) in downstream KL computation.
+
         Args:
             logits: Shape [B, z_cats, z_classes] — raw (pre-softmax) logits.
 
         Returns:
             Flat one-hot z_t of shape [B, z_cats * z_classes].
         """
-        # Apply unimix: mix softmax probs with uniform to prevent log(0)
+        # Apply unimix: mix softmax probs with uniform to prevent log(0) in KL
         mixed_probs = unimix(logits, eps=self.unimix_eps)
-        # Convert mixed probs back to log-space for STE sampling
+        # Convert mixed probs back to log-space for sampling
         logits_for_sample = torch.log(mixed_probs.clamp(min=1e-8))
-        z = straight_through_sample(logits_for_sample)    # [B, z_cats, z_classes]
+        if self.training:
+            # Stochastic: explore categorical space during training
+            z = sample_categorical(logits_for_sample)
+        else:
+            # Deterministic: MAP estimate at eval/inference time
+            z = straight_through_sample(logits_for_sample)
         return z.reshape(z.shape[0], -1)                  # [B, z_dim]
 
     def observe(
@@ -142,7 +157,7 @@ class RSSM(nn.Module):
         posterior_input = torch.cat([h, obs_embed], dim=-1)   # [B, h_dim + obs_dim]
         posterior_logits = self.posterior_head(posterior_input)
         posterior_logits = posterior_logits.reshape(
-            -1, self.z_cats, self.z_classes
+            h.shape[0], self.z_cats, self.z_classes
         )                                                      # [B, z_cats, z_classes]
         z = self._sample_z(posterior_logits)                  # [B, z_dim]
         return posterior_logits, State(h=h, z=z)
@@ -166,7 +181,7 @@ class RSSM(nn.Module):
         h = self._gru_step(state.z, action, state.h)         # [B, h_dim]
         prior_logits = self.prior_head(h)
         prior_logits = prior_logits.reshape(
-            -1, self.z_cats, self.z_classes
+            h.shape[0], self.z_cats, self.z_classes
         )                                                      # [B, z_cats, z_classes]
         z = self._sample_z(prior_logits)                      # [B, z_dim]
         return prior_logits, State(h=h, z=z)
