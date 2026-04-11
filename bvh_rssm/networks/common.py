@@ -29,6 +29,10 @@ class MLP(nn.Module):
         n_layers: int = 2,
     ) -> None:
         super().__init__()
+        if n_layers < 0:
+            raise ValueError(f"n_layers must be >= 0, got {n_layers}")
+        if hidden_dim <= 0:
+            raise ValueError(f"hidden_dim must be > 0, got {hidden_dim}")
         layers: list[nn.Module] = []
         prev_dim = in_dim
         for _ in range(n_layers):
@@ -52,6 +56,9 @@ class LayerNormMLP(nn.Module):
         out_dim: Output feature dimension.
         hidden_dim: Width of hidden layers.
         n_layers: Number of hidden layers.
+
+    Note: n_layers=0 produces a bare linear layer with no normalization.
+          hidden_dim is ignored when n_layers=0.
     """
 
     def __init__(
@@ -62,6 +69,10 @@ class LayerNormMLP(nn.Module):
         n_layers: int = 2,
     ) -> None:
         super().__init__()
+        if n_layers < 0:
+            raise ValueError(f"n_layers must be >= 0, got {n_layers}")
+        if hidden_dim <= 0:
+            raise ValueError(f"hidden_dim must be > 0, got {hidden_dim}")
         layers: list[nn.Module] = []
         prev_dim = in_dim
         for _ in range(n_layers):
