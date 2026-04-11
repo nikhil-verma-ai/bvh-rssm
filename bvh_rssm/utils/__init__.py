@@ -10,6 +10,7 @@ from bvh_rssm.utils.distributions import (
     straight_through_sample,
     sample_categorical,
 )
+from bvh_rssm.utils.rng import RNGStateStore, restore_rng_states
 
 __all__ = [
     "symlog",
@@ -20,4 +21,6 @@ __all__ = [
     "unimix",
     "straight_through_sample",
     "sample_categorical",
+    "RNGStateStore",
+    "restore_rng_states",
 ]
