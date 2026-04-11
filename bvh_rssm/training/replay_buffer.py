@@ -89,13 +89,22 @@ class ReplayBuffer:
             is_interventionist [B,T], rng_states list[list[dict]].
         """
         T = seq_len or self.seq_len
-        assert self._size >= T, f"Buffer has {self._size} transitions, need at least {T}"
+        if self._size < T:
+            raise ValueError(f"Buffer has {self._size} transitions, need at least {T}")
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
-        max_start = self._size - T
-        starts = np.random.randint(0, max_start + 1, size=batch_size)
+        # Oldest valid slot: _ptr when buffer is full (just-overwritten slot is oldest),
+        # else 0 (buffer hasn't wrapped yet).
+        oldest = self._ptr if self._size == self.capacity else 0
 
-        indices = np.array([(s + t) % self.capacity for s in starts for t in range(T)])
-        indices = indices.reshape(batch_size, T)
+        # Sample logical offsets within the valid window [0, _size - T]
+        logical_starts = np.random.randint(0, self._size - T + 1, size=batch_size)
+
+        # Convert to physical indices with circular wrap
+        indices = np.array(
+            [((oldest + s + t) % self.capacity) for s in logical_starts for t in range(T)]
+        ).reshape(batch_size, T)
 
         batch = {
             "obs": torch.from_numpy(self._obs[indices]),

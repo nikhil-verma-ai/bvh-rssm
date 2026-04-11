@@ -74,3 +74,24 @@ class TestReplayBuffer:
         # rng_states is a list of lists of dicts (B x T)
         assert len(batch["rng_states"]) == 2
         assert len(batch["rng_states"][0]) == 5
+
+    def test_sample_temporal_contiguity_after_wrap(self):
+        """After wrap, samples must contain temporally contiguous transitions."""
+        # Push capacity + extra with unique oracle_tau = i for each transition
+        n = self.capacity + 20
+        for i in range(n):
+            obs = np.random.randn(self.obs_dim).astype(np.float32)
+            action = np.random.randn(self.action_dim).astype(np.float32)
+            rng_state = {"torch_cpu": torch.get_rng_state(), "numpy": np.random.get_state()}
+            self.buf.push(obs, action, 0.0, False, oracle_tau=i, is_interventionist=False, rng_state=rng_state)
+
+        assert len(self.buf) == self.capacity  # confirm wrap happened
+
+        # Sample many batches and verify all sequences are temporally contiguous
+        for _ in range(20):
+            batch = self.buf.sample(batch_size=4, seq_len=8)
+            taus = batch["oracle_tau"]  # [4, 8] int64
+            # Each row must be strictly increasing (unique oracle_tau = i)
+            diffs = taus[:, 1:] - taus[:, :-1]
+            assert (diffs == 1).all(), \
+                f"Non-contiguous sequence detected. Diffs: {diffs}"
