@@ -20,6 +20,13 @@ class Encoder(nn.Module):
     Applies symlog to compress observation scale, then passes through a
     LayerNormMLP. Output fed into RSSM.observe() as obs_embed.
 
+    Contract: Expects raw, unscaled observations. The symlog transform is applied
+    internally to compress observation scale. Do NOT pre-normalize observations
+    before passing to this encoder — symlog handles scale compression.
+    Environments that already return compressed representations (log-returns,
+    normalized states) will have symlog applied redundantly, but symlog(x) ≈ x
+    for |x| << 1 so the numerical impact is negligible.
+
     Args:
         obs_dim: Raw observation dimensionality.
         embed_dim: Output embedding dimension (= RSSM obs_dim).

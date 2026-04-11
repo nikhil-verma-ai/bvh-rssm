@@ -57,15 +57,20 @@ class TestDecoder:
         assert latent.grad is not None
 
     def test_nll_loss_computation(self):
-        """Decoder NLL loss must be finite and differentiable."""
+        """Decoder NLL loss must be finite and differentiable (computed in symlog space)."""
+        from bvh_rssm.utils import symlog
         latent = torch.randn(4, self.h_dim + self.z_dim)
+        # Targets must be symlog-transformed for loss computation
         obs_target = torch.randn(4, self.obs_dim)
-        mean, log_std = self.decoder(latent)
+        mean_symlog, log_std = self.decoder.decode_symlog(latent)
         std = log_std.exp()
-        nll = 0.5 * ((obs_target - mean) / std).pow(2) + log_std + 0.9189
+        # NLL in symlog space (DreamerV3 canonical)
+        nll = 0.5 * ((symlog(obs_target) - mean_symlog) / std).pow(2) + log_std + 0.9189
         loss = nll.mean()
         assert torch.isfinite(loss)
+        self.decoder.zero_grad()
         loss.backward()
+        assert any(p.grad is not None for p in self.decoder.parameters())
 
     def test_symexp_applied_to_output(self):
         """Decoder applies symexp to mean output to recover original scale."""
@@ -103,3 +108,4 @@ class TestEncoderDecoderWithRSSM:
         latent = torch.cat([h, z], dim=-1)
         mean, log_std = decoder(latent)
         assert mean.shape == (2, obs_dim)
+        assert log_std.shape == (2, obs_dim)

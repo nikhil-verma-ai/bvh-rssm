@@ -56,6 +56,10 @@ class Decoder(nn.Module):
             (mean, log_std) each of shape [*batch, obs_dim].
             mean is in original observation scale (symexp applied).
             log_std is clamped to [-5, 5] for numerical stability.
+
+        Note: For training loss computation, use decode_symlog() which returns
+        mean in symlog space. Use this method (forward) only for rendering
+        where original scale is needed.
         """
         out = self.mlp(latent)                            # [*batch, obs_dim+1]
         mean_symlog = out[..., :self.obs_dim]             # [*batch, obs_dim]
@@ -65,3 +69,29 @@ class Decoder(nn.Module):
         ).clamp(-5.0, 5.0)                               # [*batch, obs_dim]
         mean = symexp(mean_symlog)                        # recover original scale
         return mean, log_std
+
+    def decode_symlog(self, latent: Tensor) -> Tuple[Tensor, Tensor]:
+        """Decode latent to symlog-space distribution parameters (for loss computation).
+
+        This is the method to use for training loss — compute NLL against
+        symlog-transformed targets: loss = NLL(symlog(obs_target), mean_symlog, std).
+
+        DreamerV3 computes all reconstruction losses in symlog space for numerical
+        stability. Use forward() only for rendering/visualization where original
+        scale is needed.
+
+        Args:
+            latent: Concatenated [h_t; z_t] of shape [*batch, latent_dim].
+
+        Returns:
+            (mean_symlog, log_std) each of shape [*batch, obs_dim].
+            mean_symlog is in symlog space (no symexp applied).
+            log_std is clamped to [-5, 5].
+        """
+        out = self.mlp(latent)
+        mean_symlog = out[..., :self.obs_dim]
+        log_std_scalar = out[..., self.obs_dim:]
+        log_std = log_std_scalar.expand(
+            *out.shape[:-1], self.obs_dim
+        ).clamp(-5.0, 5.0)
+        return mean_symlog, log_std
