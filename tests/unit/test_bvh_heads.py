@@ -58,13 +58,34 @@ class TestValidityHead:
         assert latent.grad is None or latent.grad.abs().sum() == 0
 
     def test_bins_stored_as_buffer(self):
-        """bins must be a registered buffer (auto device placement)."""
-        assert hasattr(self.head, 'bins')
-        assert isinstance(self.head.bins, torch.Tensor)
+        """bins must be in named_buffers(), not a plain attribute."""
+        assert "bins" in dict(self.head.named_buffers()), \
+            "bins must be registered via register_buffer, not plain attribute"
 
     def test_loss_nonnegative(self):
         latent = torch.randn(4, self.latent_dim)
         action = torch.randn(4, self.action_dim)
         oracle_tau = torch.ones(4) * 5.0
         loss = self.head.loss(latent, action, oracle_tau)
+        assert loss.item() >= 0.0
+
+    def test_decode_roundtrip(self):
+        """Decode of perfect twohot logits must recover target tau within 5%."""
+        from bvh_rssm.utils import symlog, twohot
+        target_tau = 42.0
+        bins = self.head.bins
+        target_symlog = symlog(torch.tensor(target_tau))
+        twohot_target = twohot(target_symlog.unsqueeze(0), bins)   # [1, n_bins]
+        logits = torch.log(twohot_target + 1e-8)                   # [1, n_bins]
+        decoded = self.head.decode(logits)                          # [1]
+        assert abs(decoded.item() - target_tau) / target_tau < 0.05, \
+            f"Expected ~{target_tau}, got {decoded.item()}"
+
+    def test_loss_oracle_tau_zero(self):
+        """oracle_tau=0 must not produce NaN or negative loss."""
+        latent = torch.randn(2, self.latent_dim)
+        action = torch.randn(2, self.action_dim)
+        oracle_tau = torch.zeros(2)
+        loss = self.head.loss(latent, action, oracle_tau)
+        assert torch.isfinite(loss)
         assert loss.item() >= 0.0
