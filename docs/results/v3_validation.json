@@ -1,0 +1,50 @@
+{
+  "config": {
+    "shift_rate": 100.0,
+    "seed_steps": 1000,
+    "p1_steps": 0,
+    "p2_steps": 50000,
+    "K": 16,
+    "device": "mps",
+    "grad_clip": 5.0,
+    "online": true,
+    "skip_p1": "checkpoints/p1_joint.pt",
+    "save_p1": null
+  },
+  "phase1": {
+    "loss_early": null,
+    "loss_late": null,
+    "pred_early": null,
+    "pred_late": null,
+    "kl_before": null,
+    "kl_after": null,
+    "skipped": true
+  },
+  "phase2": {
+    "tau_loss_early": 3.114632248878479,
+    "tau_loss_late": 3.3776764392852785,
+    "kl_before": 0.5502373185008764,
+    "kl_after": 0.5218982622027397,
+    "kl_increase": -0.02833905629813671
+  },
+  "eval_metrics": {
+    "mae_tau": 6.883403301239014,
+    "naive_mean_mae": 7.260154724121094,
+    "naive_zero_mae": 10.261099815368652,
+    "pred_std": 1.1014347076416016,
+    "pred_variance": 1.2131584882736206,
+    "c_index": 0.506587881514079,
+    "brier_score": 0.19926476902740192,
+    "n_samples": 10000
+  },
+  "pass_fail": {
+    "p1_loss_decreasing": true,
+    "kl_not_collapsed": true,
+    "stopgrad_ok": true,
+    "tau_loss_decreasing": false,
+    "beats_naive_mean": true,
+    "beats_naive_zero": true,
+    "prediction_not_collapsed": true,
+    "c_index": 0.506587881514079
+  }
+}
