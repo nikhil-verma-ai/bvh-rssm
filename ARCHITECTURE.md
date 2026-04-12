@@ -119,8 +119,10 @@ L_P2 = L_τ + L_survival
 
 **Stop-grad invariant:** The KL divergence of the world model must not change by more
 than 0.5 nat during Phase 2. Verified: v2 run shows ΔKL = −0.001 nat. This confirms
-head training is not leaking gradients into the frozen RSSM (the `latent.detach()`
-in `ValidityHead.forward` and `HazardHead.forward` is effective).
+head training is not leaking gradients into the frozen RSSM. For `ValidityHead`,
+an explicit `latent.detach()` is applied in `forward()` when `stop_grad=True`. For `HazardHead`,
+the freeze is achieved by the optimizer only training head parameters — the world model weights
+have `requires_grad=False` during Phase 2.
 
 **Burn-in:** For online collection sequences of length 64, the first 32 timesteps are
 excluded from the τ loss. The GRU `h_t` needs time to accumulate evidence of a regime

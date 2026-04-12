@@ -111,6 +111,7 @@ Expected output:
 [Phase 1] Done
 [Phase 2] BVH head training for 50 steps …
 [Phase 2] Done
+[Phase 3] Skipped (phase3_steps=0)
 [train] All phases complete.
 ```
 
