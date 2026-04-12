@@ -22,6 +22,7 @@ References:
 """
 from __future__ import annotations
 
+import math
 from typing import Dict
 
 import torch
@@ -66,10 +67,10 @@ def kl_loss(
     # Shape after sum(-1): [B, z_cats]
     kl_per_cat = (post_probs * (post_probs.clamp(min=1e-8).log() - prior_probs.clamp(min=1e-8).log())).sum(-1)
 
-    # Free bits: clamp each category's KL, then average over batch and categories
-    kl_clamped = kl_per_cat.clamp(min=free_bits)
-
-    return kl_clamped.mean()
+    # DreamerV3: clamp per-category batch mean, then average over categories
+    # kl_per_cat: [B, z_cats] → mean over batch → [z_cats] → clamp → scalar
+    kl_per_cat_mean = kl_per_cat.mean(dim=0)          # [z_cats]
+    return kl_per_cat_mean.clamp(min=free_bits).mean()
 
 
 def world_model_loss(
@@ -162,7 +163,11 @@ def world_model_loss(
     obs_symlog = symlog(obs_flat)                               # [B*T, obs_dim]
     std = log_std.exp()
     # NLL of isotropic Gaussian in symlog space, summed over obs_dim, meaned over B*T
-    obs_nll = (0.5 * ((obs_symlog - mean_symlog) / std) ** 2 + log_std + 0.5 * (2 * torch.tensor(3.14159265358979).log())).sum(-1).mean()
+    obs_nll = (
+        0.5 * ((obs_symlog - mean_symlog) / std).pow(2)
+        + log_std
+        + 0.5 * math.log(2 * math.pi)
+    ).sum(-1).mean()
 
     # Reward loss
     reward_flat = rewards.reshape(B * T)
