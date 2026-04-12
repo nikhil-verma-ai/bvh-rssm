@@ -310,16 +310,23 @@ def evaluate(
                 "_raw_returns": all_returns,
             }
 
-    # Compute delta_return for each agent vs RandomSwitch
-    random_results = results.get("RandomSwitch", {})
+    # Compute delta_return for each agent vs RandomSwitch.
+    # Snapshot RandomSwitch raw returns before the deletion loop: the loop
+    # deletes _raw_returns as it processes each agent, and since random_results
+    # is a reference into the same dict, deleting RandomSwitch's entry in-loop
+    # would silently zero out delta_return for all subsequent agents.
+    random_raw: Dict[str, list] = {}
+    if "RandomSwitch" in results:
+        for env_name_key in env_names:
+            if env_name_key in results["RandomSwitch"]:
+                random_raw[env_name_key] = results["RandomSwitch"][env_name_key]["_raw_returns"]
+
     for agent_name in results:
         for env_name in env_names:
             if env_name not in results[agent_name]:
                 continue
             agent_returns = np.array(results[agent_name][env_name]["_raw_returns"])
-            random_returns = np.array(
-                random_results.get(env_name, {}).get("_raw_returns", agent_returns)
-            )
+            random_returns = np.array(random_raw.get(env_name, agent_returns))
             results[agent_name][env_name]["delta_return_vs_random"] = delta_return(
                 agent_returns, random_returns
             )
