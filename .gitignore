@@ -46,3 +46,11 @@ multirun/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Runtime logs and scratch results
+*.log
+results/eval_*.json
+validation_report.json
+
+# Internal tooling
+docs/superpowers/
