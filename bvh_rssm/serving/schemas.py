@@ -16,9 +16,10 @@ RouterSignal literal values:
 """
 from __future__ import annotations
 
+import base64
 from typing import Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_serializer, field_validator
 
 RouterSignal = Literal["HIGH", "DIM", "STALE"]
 
@@ -53,6 +54,19 @@ class PredictRequest(BaseModel):
     def action_nonempty(cls, v: list[float]) -> list[float]:
         if len(v) == 0:
             raise ValueError("action must be non-empty")
+        return v
+
+    @field_validator("state", mode="before")
+    @classmethod
+    def decode_state_base64(cls, v: object) -> object:
+        """Accept base64-encoded strings from JSON clients and decode to bytes.
+
+        Pydantic v2 does not auto-decode base64 for bytes fields, so a client
+        that echoes back the base64 string from PredictResponse.state must have
+        it decoded here before Pydantic validates the type as bytes.
+        """
+        if isinstance(v, str):
+            return base64.b64decode(v)
         return v
 
 
@@ -91,6 +105,17 @@ class PredictResponse(BaseModel):
             )
         return v
 
+    @field_serializer("state")
+    def serialize_state(self, v: bytes) -> str:
+        """Encode binary state bytes as base64 for JSON transport.
+
+        Torch-serialised state blobs contain arbitrary binary data and cannot
+        be embedded in JSON as raw strings. Base64 encoding is the standard
+        approach; clients echo the string back verbatim and decode_state_base64
+        in PredictRequest reconstructs the original bytes.
+        """
+        return base64.b64encode(v).decode("ascii")
+
 
 class RefreshRequest(BaseModel):
     """Posterior batch update request.
@@ -122,3 +147,11 @@ class RefreshResponse(BaseModel):
     new_tau: float
     retrain_needed: bool
     state: bytes
+
+    @field_serializer("state")
+    def serialize_state(self, v: bytes) -> str:
+        """Encode binary state bytes as base64 for JSON transport.
+
+        Mirrors PredictResponse.serialize_state — see that docstring for rationale.
+        """
+        return base64.b64encode(v).decode("ascii")

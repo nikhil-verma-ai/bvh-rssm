@@ -180,3 +180,94 @@ class TestPredictor:
         state = p._deserialise_state(result["state"])
         assert not state.h.requires_grad
         assert not state.z.requires_grad
+
+
+class TestServer:
+    @pytest.fixture
+    def client(self):
+        """TestClient wrapping the FastAPI app with a fast_mode predictor."""
+        from bvh_rssm.serving.server import create_app
+        from bvh_rssm.serving.predictor import Predictor
+        predictor = Predictor.from_scratch(fast_mode=True)
+        app = create_app(predictor)
+        from starlette.testclient import TestClient
+        with TestClient(app) as c:
+            yield c
+
+    def test_predict_returns_200(self, client):
+        resp = client.post(
+            "/predict",
+            json={"obs": [0.1] * 8, "action": [0.0] * 3, "state": None},
+        )
+        assert resp.status_code == 200
+
+    def test_predict_response_shape(self, client):
+        resp = client.post(
+            "/predict",
+            json={"obs": [0.1] * 8, "action": [0.0] * 3, "state": None},
+        )
+        body = resp.json()
+        assert "tau" in body
+        assert "survival_curve" in body
+        assert len(body["survival_curve"]) == 16
+        assert "router_signal" in body
+        assert body["router_signal"] in ("HIGH", "DIM", "STALE")
+        assert "lambda_intervals" in body
+        assert len(body["lambda_intervals"]) == 16
+        assert "state" in body  # base64 string
+
+    def test_predict_chained_with_state(self, client):
+        """Second request carries state from first — must not crash."""
+        r1 = client.post(
+            "/predict",
+            json={"obs": [0.5] * 8, "action": [0.1] * 3, "state": None},
+        )
+        assert r1.status_code == 200
+        state_b64: str = r1.json()["state"]
+        # Pydantic v2 encodes bytes as base64 — pass back verbatim as string
+        r2 = client.post(
+            "/predict",
+            json={"obs": [0.6] * 8, "action": [0.1] * 3, "state": state_b64},
+        )
+        assert r2.status_code == 200
+        assert r2.json()["tau"] >= 0.0
+
+    def test_predict_bad_request_422(self, client):
+        """Malformed request must return 422 Unprocessable Entity."""
+        resp = client.post(
+            "/predict",
+            json={"obs": "not_a_list", "action": [0.0], "state": None},
+        )
+        assert resp.status_code == 422
+
+    def test_refresh_returns_200(self, client):
+        resp = client.post(
+            "/refresh",
+            json={"obs_batch": [[0.1] * 8, [0.2] * 8]},
+        )
+        assert resp.status_code == 200
+
+    def test_refresh_response_shape(self, client):
+        resp = client.post(
+            "/refresh",
+            json={"obs_batch": [[0.3] * 8]},
+        )
+        body = resp.json()
+        assert "new_tau" in body
+        assert "retrain_needed" in body
+        assert isinstance(body["retrain_needed"], bool)
+        assert "state" in body
+
+    def test_refresh_empty_batch_422(self, client):
+        """Empty obs_batch must be rejected with 422."""
+        resp = client.post(
+            "/refresh",
+            json={"obs_batch": []},
+        )
+        assert resp.status_code == 422
+
+    def test_health_check(self, client):
+        """GET / returns 200 with status ok."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
