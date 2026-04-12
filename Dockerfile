@@ -24,24 +24,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy only the source package and startup script.
-# pyproject.toml is needed for pip install -e to resolve the package.
 COPY pyproject.toml ./
-COPY bvh_rssm/ ./bvh_rssm/
-COPY scripts/serve.py ./scripts/serve.py
 
-# Install serving dependencies explicitly.
-# torch CPU-only wheel is significantly smaller than the CUDA wheel.
-# Pin versions to match pyproject.toml minimums for reproducibility.
+# Install serving dependencies before copying source so this layer is
+# cached across code changes. torch is ~2 GB — re-downloading on every
+# bvh_rssm/ edit defeats the point of layer caching.
 RUN pip install --no-cache-dir \
     "torch>=2.0" \
     "fastapi>=0.110" \
     "uvicorn[standard]>=0.29" \
     "pydantic>=2.6" \
-    "numpy>=1.26" \
- && pip install --no-cache-dir -e . --no-deps
+    "numpy>=1.26"
 
-# Serving port
+COPY bvh_rssm/ ./bvh_rssm/
+COPY scripts/serve.py ./scripts/serve.py
+
+RUN pip install --no-cache-dir -e . --no-deps
+
 EXPOSE 8000
 
 # Default: serve on 0.0.0.0:8000 — caller must provide --checkpoint or --fast-mode

@@ -60,10 +60,10 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if args.workers > 1 and args.device.startswith("cuda"):
+    if args.workers > 1:
         print(
-            "WARNING: --workers > 1 with CUDA is unsafe (fork after CUDA init). "
-            "Falling back to 1 worker.",
+            "WARNING: --workers > 1 is not supported when passing a pre-instantiated "
+            "app object to uvicorn. Falling back to 1 worker.",
             file=sys.stderr,
         )
         args.workers = 1
@@ -73,10 +73,10 @@ def main() -> None:
     from bvh_rssm.serving.server import create_app
 
     if args.fast_mode:
-        print("INFO: fast-mode — using untrained predictor (outputs are meaningless)")
+        print("INFO: fast-mode — using untrained predictor (outputs are meaningless)", file=sys.stderr)
         predictor = Predictor.from_scratch(fast_mode=True)
     else:
-        print(f"INFO: loading checkpoint from {args.checkpoint}")
+        print(f"INFO: loading checkpoint from {args.checkpoint}", file=sys.stderr)
         predictor = Predictor.from_checkpoint(args.checkpoint, device=args.device)
 
     app = create_app(predictor)
