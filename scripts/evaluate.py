@@ -278,16 +278,29 @@ def evaluate(
     if fast_mode:
         max_steps_per_episode = 200
 
-    # Discover action_dim from the first env.
+    # Discover action_dim from the first available env.
     # Use _get_action_dim to handle both Box and Discrete action spaces correctly.
-    probe_env = make_env(env_names[0], fast_mode)
-    action_dim = _get_action_dim(probe_env)
-    probe_env.close()
+    action_dim = 1
+    for _probe_name in env_names:
+        try:
+            probe_env = make_env(_probe_name, fast_mode)
+            action_dim = _get_action_dim(probe_env)
+            probe_env.close()
+            break
+        except Exception:
+            continue
 
     agents = build_agents(action_dim, checkpoint)
     results: Dict[str, Dict[str, Any]] = {name: {} for name in agents}
 
     for env_name in env_names:
+        # Skip envs that require optional dependencies (mujoco, minigrid) not installed.
+        try:
+            probe = make_env(env_name, fast_mode)
+            probe.close()
+        except Exception as exc:
+            print(f"  env={env_name} SKIPPED ({type(exc).__name__}: {exc})", flush=True)
+            continue
         print(f"  env={env_name}", flush=True)
         for agent_name, agent in agents.items():
             all_mae: List[float] = []

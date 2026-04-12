@@ -10,18 +10,18 @@ test-env:
 	pytest tests/integration/test_environments.py -v
 
 smoke-train:
-	python scripts/train.py +experiment=smoke_train
+	python scripts/train.py --fast
 
 smoke-serve:
-	python scripts/serve.py &
+	python scripts/serve.py --fast-mode &
 	sleep 2
 	curl -s -X POST http://localhost:8000/predict \
 		-H "Content-Type: application/json" \
-		-d '{"obs": [0.0, 0.0, 0.0], "action": [0.0], "state": null}' | python -m json.tool
+		-d '{"obs": [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], "action": [0.0,0.0,0.0], "state": null}' | python -m json.tool
 	pkill -f "scripts/serve.py" || true
 
 full-run:
-	python scripts/train.py +experiment=full_run
+	python scripts/train.py
 
 lint:
 	python -m pyright bvh_rssm/
