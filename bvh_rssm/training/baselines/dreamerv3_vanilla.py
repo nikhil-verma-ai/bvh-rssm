@@ -1,6 +1,7 @@
 """DreamerV3 vanilla baseline — RSSM only, fixed 16-step horizon, no BVH heads."""
 from __future__ import annotations
 from typing import Any, Dict, Tuple
+import warnings
 import numpy as np
 from bvh_rssm.training.baselines.base import BaselineAgent
 
@@ -24,5 +25,10 @@ class DreamerV3Vanilla(BaselineAgent):
 
     def act(self, obs: np.ndarray, state: Dict[str, Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
         # Stub: full impl runs RSSM.observe + actor.forward with fixed horizon
+        warnings.warn(
+            "DreamerV3Vanilla.act is a stub — returns zero actions. "
+            "Wire a real model before using in eval.",
+            stacklevel=2,
+        )
         action = np.zeros(self.action_dim, dtype=np.float32)
         return action, {**state, "step": state["step"] + 1, "just_switched": False}

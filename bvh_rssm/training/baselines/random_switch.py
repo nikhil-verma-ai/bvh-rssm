@@ -12,6 +12,12 @@ class RandomSwitch(BaselineAgent):
         switch_rate: Probability of switching per step.
         action_dim: Action space dimension.
         seed: RNG seed for reproducibility.
+
+    Note:
+        The internal RNG (``_rng``) is instance state, not serialized into the
+        ``state`` dict. Saving and restoring only the ``state`` dict will NOT
+        reproduce the same random sequence. For checkpoint-resumable eval, capture
+        the agent instance directly or re-seed with the same seed.
     """
 
     def __init__(self, switch_rate: float, action_dim: int, seed: int = 0) -> None:
