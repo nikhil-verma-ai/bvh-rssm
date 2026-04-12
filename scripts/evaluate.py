@@ -53,6 +53,7 @@ from bvh_rssm.training.baselines.base import BaselineAgent
 from bvh_rssm.training.baselines.fixed_interval_switch import FixedIntervalSwitch
 from bvh_rssm.training.baselines.random_switch import RandomSwitch
 from bvh_rssm.training.metrics import mae_tau, delta_return
+from bvh_rssm.serving.predictor import Predictor
 
 
 # ---------------------------------------------------------------------------
@@ -112,14 +113,82 @@ def _get_action_dim(env) -> int:
 
 
 # ---------------------------------------------------------------------------
-# BVH stub — zero tau predictor (replaced by real model in Phase 8)
+# BVH agent — real Predictor-backed agent
 # ---------------------------------------------------------------------------
+
+class BVHAgent(BaselineAgent):
+    """BVH-RSSM agent backed by a Predictor instance.
+
+    Uses the Predictor's /predict logic to run posterior RSSM inference at each
+    step. The RSSM state is carried as serialised bytes in the agent state dict,
+    making this agent compatible with the stateless episode runner.
+
+    When router_signal == "STALE", just_switched is set True so the episode
+    runner can record the predicted switch step for f1_switching metrics.
+
+    The policy outputs zero actions — the agent's value is in tau prediction
+    and router signalling, not in action quality (which requires a trained actor).
+    A trained actor can be plugged in by subclassing and overriding _get_action().
+
+    Args:
+        predictor: Initialised Predictor instance.
+        action_dim: Action space dimension (used for zero-action fallback).
+        obs_dim: Expected observation dimension. If obs doesn't match, fall back
+                 to stub behaviour (zero tau, no state update).
+    """
+
+    def __init__(self, predictor: Predictor, action_dim: int, obs_dim: int = -1) -> None:
+        self.predictor = predictor
+        self.action_dim = action_dim
+        self.obs_dim = obs_dim  # -1 means no check
+
+    def _get_action(self, obs: np.ndarray, action_dim: int) -> List[float]:
+        """Return action to send to env. Override in subclass for trained policy."""
+        return [0.0] * action_dim
+
+    def initial_state(self) -> Dict[str, Any]:
+        return {
+            "step": 0,
+            "just_switched": False,
+            "tau_pred": 0.0,
+            "rssm_state_bytes": None,   # None triggers cold start in Predictor
+        }
+
+    def act(
+        self, obs: np.ndarray, state: Dict[str, Any]
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        action_list = self._get_action(obs, self.action_dim)
+        action = np.array(action_list, dtype=np.float32)
+
+        # Obs_dim mismatch → degrade to stub (no RSSM update, tau=0)
+        if self.obs_dim > 0 and obs.shape[0] != self.obs_dim:
+            return action, {
+                "step": state["step"] + 1,
+                "just_switched": False,
+                "tau_pred": 0.0,
+                "rssm_state_bytes": state["rssm_state_bytes"],
+            }
+
+        result = self.predictor.predict(
+            obs=obs.tolist(),
+            action=action_list,
+            state_bytes=state["rssm_state_bytes"],
+        )
+        tau = float(result["tau"])
+        just_switched = result["router_signal"] == "STALE"
+        return action, {
+            "step": state["step"] + 1,
+            "just_switched": just_switched,
+            "tau_pred": tau,
+            "rssm_state_bytes": result["state"],
+        }
+
 
 class BVHStub(BaselineAgent):
     """Stub BVH agent: predicts tau=0 always, acts with zeros.
 
-    Used until Phase 8 serving is integrated. Produces pessimistic mae_tau
-    by design — confirms the metric pipeline works before the real agent exists.
+    Kept for backward compatibility. Used when no checkpoint is provided and
+    fast_mode is False (so we still run the metric pipeline end-to-end).
 
     Args:
         action_dim: Action space dimension.
@@ -138,7 +207,7 @@ class BVHStub(BaselineAgent):
         return action, {
             "step": state["step"] + 1,
             "just_switched": False,
-            "tau_pred": 0.0,  # stub always predicts 0
+            "tau_pred": 0.0,
         }
 
 
@@ -217,16 +286,33 @@ def run_episode(
 # Agent factory
 # ---------------------------------------------------------------------------
 
-def build_agents(action_dim: int, checkpoint: Optional[str]) -> Dict[str, BaselineAgent]:
+def build_agents(
+    action_dim: int,
+    checkpoint: Optional[str],
+    include_bvh_untrained: bool = False,
+    device: str = "cpu",
+    obs_dim: int = 8,
+) -> Dict[str, BaselineAgent]:
     """Construct all agents for the evaluation run.
 
     Always includes FixedIntervalSwitch and RandomSwitch.
-    Includes BVHStub (stub tau=0) when no checkpoint is provided.
-    Checkpoint loading for the real BVH model is stubbed until Phase 8.
+
+    If checkpoint is provided: loads a real BVHAgent from the checkpoint via
+    Predictor.from_checkpoint(). The agent runs full RSSM posterior inference
+    at every step.
+
+    If include_bvh_untrained is True (--fast-bvh flag): instantiates a BVHAgent
+    backed by Predictor.from_scratch(fast_mode=True). Useful for verifying the
+    full eval pipeline end-to-end without a trained model.
+
+    If neither: includes BVHStub (tau=0 always) as a pessimistic baseline that
+    confirms the metric pipeline works.
 
     Args:
-        action_dim: Action space dimension (all envs use same dim for baselines).
+        action_dim: Action space dimension (used for zero-action policy).
         checkpoint: Path to a .pt checkpoint file, or None.
+        include_bvh_untrained: If True, add an untrained BVHAgent (fast_mode).
+        device: Device string for Predictor inference.
 
     Returns:
         Dict mapping agent name to agent instance.
@@ -237,15 +323,28 @@ def build_agents(action_dim: int, checkpoint: Optional[str]) -> Dict[str, Baseli
     }
 
     if checkpoint is not None:
-        # Phase 8: wire real BVH agent here.
-        # For now, warn and fall back to stub so eval pipeline still runs.
-        import warnings
-        warnings.warn(
-            f"Checkpoint loading not yet implemented (Phase 8). "
-            f"Falling back to BVHStub for checkpoint={checkpoint!r}.",
-            stacklevel=2,
+        print(f"  Loading BVH checkpoint: {checkpoint}", flush=True)
+        predictor = Predictor.from_checkpoint(checkpoint, device=device)
+        agents["BVH"] = BVHAgent(predictor, action_dim=action_dim, obs_dim=predictor._obs_dim)
+    elif include_bvh_untrained:
+        print(f"  Using untrained BVH predictor (obs_dim={obs_dim}, action_dim={action_dim})", flush=True)
+        # Build a custom from_scratch predictor matching env dims exactly
+        import torch
+        from bvh_rssm.networks.rssm import RSSM
+        from bvh_rssm.networks.encoder import Encoder
+        from bvh_rssm.networks.heads import ValidityHead, HazardHead
+        h_dim, z_cats, z_classes, embed_dim, hidden_dim = 32, 4, 4, 16, 32
+        latent_dim = h_dim + z_cats * z_classes
+        predictor = Predictor(
+            encoder=Encoder(obs_dim=obs_dim, embed_dim=embed_dim, hidden_dim=hidden_dim, n_layers=2),
+            rssm=RSSM(h_dim=h_dim, z_cats=z_cats, z_classes=z_classes, obs_dim=embed_dim, action_dim=action_dim),
+            tau_head=ValidityHead(latent_dim=latent_dim, action_dim=action_dim, hidden_dim=hidden_dim),
+            hazard_head=HazardHead(latent_dim=latent_dim, n_intervals=16, hidden_dim=hidden_dim),
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            device=torch.device(device),
         )
-        agents["BVH"] = BVHStub(action_dim=action_dim)
+        agents["BVH_untrained"] = BVHAgent(predictor, action_dim=action_dim, obs_dim=obs_dim)
     else:
         agents["BVH_stub"] = BVHStub(action_dim=action_dim)
 
@@ -262,6 +361,8 @@ def evaluate(
     fast_mode: bool,
     checkpoint: Optional[str],
     max_steps_per_episode: int = 500,
+    include_bvh_untrained: bool = False,
+    device: str = "cpu",
 ) -> Dict[str, Any]:
     """Run all agents on all environments across all seeds.
 
@@ -271,6 +372,8 @@ def evaluate(
         fast_mode: If True, use lightweight constructors and fewer steps.
         checkpoint: Optional path to BVH checkpoint.
         max_steps_per_episode: Maximum steps before truncating an episode.
+        include_bvh_untrained: If True, add untrained BVHAgent (fast_mode predictor).
+        device: Inference device for BVHAgent.
 
     Returns:
         Nested dict: {agent_name: {env_name: {metric: value, ...}}}.
@@ -278,19 +381,27 @@ def evaluate(
     if fast_mode:
         max_steps_per_episode = 200
 
-    # Discover action_dim from the first available env.
-    # Use _get_action_dim to handle both Box and Discrete action spaces correctly.
+    # Discover action_dim and obs_dim from the first available env.
     action_dim = 1
+    obs_dim = 8  # safe default matching Predictor.from_scratch
     for _probe_name in env_names:
         try:
             probe_env = make_env(_probe_name, fast_mode)
             action_dim = _get_action_dim(probe_env)
+            obs, _ = probe_env.reset(seed=0)
+            obs_dim = int(obs.shape[0])
             probe_env.close()
             break
         except Exception:
             continue
 
-    agents = build_agents(action_dim, checkpoint)
+    agents = build_agents(
+        action_dim,
+        checkpoint,
+        include_bvh_untrained=include_bvh_untrained,
+        device=device,
+        obs_dim=obs_dim,
+    )
     results: Dict[str, Dict[str, Any]] = {name: {} for name in agents}
 
     for env_name in env_names:
@@ -381,6 +492,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated list of env names. Overrides fast/full default.",
     )
+    parser.add_argument(
+        "--fast-bvh",
+        action="store_true",
+        default=False,
+        help="Include an untrained BVHAgent (from_scratch) to test the full eval pipeline.",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Inference device for BVHAgent (e.g. 'cpu', 'cuda:0', 'mps').",
+    )
     return parser
 
 
@@ -403,6 +526,8 @@ def main() -> None:
         n_seeds=n_seeds,
         fast_mode=fast_mode,
         checkpoint=args.checkpoint,
+        include_bvh_untrained=args.fast_bvh,
+        device=args.device,
     )
 
     # Serialize
