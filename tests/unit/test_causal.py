@@ -440,7 +440,6 @@ class TestIntegrationSmoke:
     def test_full_pipeline_produces_finite_results(self):
         """Build models, run all three levels, classify, get horizon."""
         from bvh_rssm.causal import CausalAttributor, AdaptivePolicyRouter, RouterState
-        from bvh_rssm.utils.rng import save_rng_state
 
         torch.manual_seed(7)
         B_smoke = 2
@@ -455,9 +454,8 @@ class TestIntegrationSmoke:
                     obs_dim=EMBED, action_dim=ACT)
         encoder = Encoder(obs_dim=OBS, embed_dim=EMBED)
         tau_head = ValidityHead(latent_dim=LATENT, action_dim=ACT)
-        hazard_head = __import__(
-            'bvh_rssm.networks', fromlist=['HazardHead']
-        ).HazardHead(latent_dim=LATENT, n_intervals=16)
+        from bvh_rssm.networks import HazardHead
+        hazard_head = HazardHead(latent_dim=LATENT, n_intervals=16)
 
         attributor = CausalAttributor(rssm=rssm, encoder=encoder, tau_head=tau_head)
         router = AdaptivePolicyRouter()
@@ -469,31 +467,32 @@ class TestIntegrationSmoke:
 
         latent = rssm.get_latent(state)
 
-        # Level 1: associational
-        tau_l1 = attributor.associational(latent, action)
-        assert tau_l1.shape == (B_smoke,)
-        assert torch.isfinite(tau_l1).all()
+        with torch.no_grad():
+            # Level 1: associational
+            tau_l1 = attributor.associational(latent, action)
+            assert tau_l1.shape == (B_smoke,)
+            assert torch.isfinite(tau_l1).all()
 
-        # Level 2: interventional
-        alt_action = torch.randn(B_smoke, ACT)
-        tau_l2 = attributor.interventional(state, alt_action)
-        assert tau_l2.shape == (B_smoke,)
-        assert torch.isfinite(tau_l2).all()
+            # Level 2: interventional
+            alt_action = torch.randn(B_smoke, ACT)
+            tau_l2 = attributor.interventional(state, alt_action)
+            assert tau_l2.shape == (B_smoke,)
+            assert torch.isfinite(tau_l2).all()
 
-        # Level 3: counterfactual — need RNG captured before factual imagine step
-        rng_pre_imagine = save_rng_state()
-        _, _ = rssm.imagine(action, state)  # factual imagine (advances RNG)
-        tau_l3 = attributor.counterfactual(state, alt_action, rng_pre_imagine)
-        assert tau_l3.shape == (B_smoke,)
-        assert torch.isfinite(tau_l3).all()
+            # Level 3: counterfactual — need RNG captured before factual imagine step
+            rng_pre_imagine = save_rng_state()
+            _, _ = rssm.imagine(action, state)  # factual imagine (advances RNG)
+            tau_l3 = attributor.counterfactual(state, alt_action, rng_pre_imagine)
+            assert tau_l3.shape == (B_smoke,)
+            assert torch.isfinite(tau_l3).all()
 
-        # Router: classify sample 0 using its survival curve
-        S_batch = hazard_head.survival(latent)   # [B_smoke, 16]
-        S_0 = S_batch[0]                          # [16]
-        tau_scalar = tau_l1[0].item()
-        router_state = router.classify(tau_hat=tau_scalar, S=S_0)
-        assert router_state in (RouterState.HIGH, RouterState.DIM, RouterState.STALE)
+            # Router: classify sample 0 using its survival curve
+            S_batch = hazard_head.survival(latent)   # [B_smoke, 16]
+            S_0 = S_batch[0]                          # [16]
+            tau_scalar = tau_l1[0].item()
+            router_state = router.classify(tau_hat=tau_scalar, S=S_0)
+            assert router_state in (RouterState.HIGH, RouterState.DIM, RouterState.STALE)
 
-        horizon = router.imagination_horizon(router_state, tau_hat=tau_scalar, full_horizon=16)
-        assert isinstance(horizon, int)
-        assert 1 <= horizon <= 16
+            horizon = router.imagination_horizon(router_state, tau_hat=tau_scalar, full_horizon=16)
+            assert isinstance(horizon, int)
+            assert 1 <= horizon <= 16
