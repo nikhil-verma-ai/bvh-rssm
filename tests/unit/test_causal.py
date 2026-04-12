@@ -230,3 +230,190 @@ class TestCausalAttributorCounterfactual:
         attributor.counterfactual(rssm_state, alt_action, rng_state)
         assert torch.allclose(rssm_state.h, h_before), "rssm_state.h mutated"
         assert torch.allclose(rssm_state.z, z_before), "rssm_state.z mutated"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: AdaptivePolicyRouter
+# ---------------------------------------------------------------------------
+
+class TestThresholdsFromSurvival:
+    @pytest.fixture
+    def router(self):
+        from bvh_rssm.causal.router import AdaptivePolicyRouter
+        return AdaptivePolicyRouter()
+
+    def test_tau_hi_is_first_index_at_or_below_080(self, router):
+        # S drops from 0.95 at t=0 to 0.75 at t=3 — tau_hi should be 3
+        # (first index where S <= 0.80)
+        S = torch.tensor([0.95, 0.90, 0.82, 0.75, 0.50, 0.25, 0.10, 0.05])
+        tau_hi, tau_min = router.thresholds_from_survival(S)
+        assert tau_hi == 3, f"Expected tau_hi=3, got {tau_hi}"
+
+    def test_tau_min_is_first_index_at_or_below_020(self, router):
+        # S drops to 0.15 at t=6
+        S = torch.tensor([0.95, 0.90, 0.82, 0.75, 0.50, 0.25, 0.15, 0.05])
+        tau_hi, tau_min = router.thresholds_from_survival(S)
+        assert tau_min == 6, f"Expected tau_min=6, got {tau_min}"
+
+    def test_tau_hi_exact_boundary(self, router):
+        # S is exactly 0.80 at index 2 — should be included (<=)
+        S = torch.tensor([0.95, 0.85, 0.80, 0.70, 0.50, 0.30, 0.15, 0.05])
+        tau_hi, _ = router.thresholds_from_survival(S)
+        assert tau_hi == 2, f"Expected tau_hi=2 at exact 0.80 boundary, got {tau_hi}"
+
+    def test_tau_min_exact_boundary(self, router):
+        # S is exactly 0.20 at index 5
+        S = torch.tensor([0.95, 0.85, 0.70, 0.50, 0.30, 0.20, 0.10, 0.05])
+        _, tau_min = router.thresholds_from_survival(S)
+        assert tau_min == 5, f"Expected tau_min=5 at exact 0.20 boundary, got {tau_min}"
+
+    def test_fallback_when_S_never_crosses_080(self, router):
+        # S stays above 0.80 for all K — tau_hi should be K-1
+        S = torch.tensor([0.99, 0.98, 0.97, 0.96, 0.95, 0.94, 0.93, 0.92])
+        K = S.shape[0]
+        tau_hi, _ = router.thresholds_from_survival(S)
+        assert tau_hi == K - 1, f"Expected fallback tau_hi={K-1}, got {tau_hi}"
+
+    def test_fallback_when_S_never_crosses_020(self, router):
+        # S stays above 0.20 for all K — tau_min should be K-1
+        S = torch.tensor([0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25])
+        K = S.shape[0]
+        _, tau_min = router.thresholds_from_survival(S)
+        assert tau_min == K - 1, f"Expected fallback tau_min={K-1}, got {tau_min}"
+
+    def test_returns_integers(self, router):
+        S = torch.tensor([0.95, 0.85, 0.75, 0.50, 0.25, 0.10, 0.05, 0.02])
+        tau_hi, tau_min = router.thresholds_from_survival(S)
+        assert isinstance(tau_hi, int), f"tau_hi must be int, got {type(tau_hi)}"
+        assert isinstance(tau_min, int), f"tau_min must be int, got {type(tau_min)}"
+
+    def test_tau_hi_leq_tau_min_for_well_shaped_curve(self, router):
+        # In a properly monotone-decreasing survival curve, tau_hi <= tau_min
+        # (80% threshold is crossed before 20% threshold)
+        S = torch.tensor([0.95, 0.85, 0.75, 0.50, 0.25, 0.10, 0.05, 0.02])
+        tau_hi, tau_min = router.thresholds_from_survival(S)
+        assert tau_hi <= tau_min, (
+            f"For monotone S, tau_hi ({tau_hi}) should be <= tau_min ({tau_min})"
+        )
+
+
+class TestClassify:
+    @pytest.fixture
+    def router(self):
+        from bvh_rssm.causal.router import AdaptivePolicyRouter
+        return AdaptivePolicyRouter()
+
+    @pytest.fixture
+    def typical_S(self):
+        # tau_hi=2 (S drops to 0.75 <= 0.80), tau_min=5 (S drops to 0.15 <= 0.20)
+        return torch.tensor([0.95, 0.85, 0.75, 0.50, 0.25, 0.15, 0.08, 0.03])
+
+    def test_classify_high_when_above_tau_hi(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        # tau_min = 5, so tau_hat > 5 is HIGH (HIGH requires exceeding the pessimistic threshold)
+        state = router.classify(tau_hat=6.0, S=typical_S)
+        assert state == RouterState.HIGH, f"Expected HIGH, got {state}"
+
+    def test_classify_stale_when_below_tau_hi(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hi = 2 (optimistic crossing); tau_hat < tau_hi is STALE
+        state = router.classify(tau_hat=1.0, S=typical_S)
+        assert state == RouterState.STALE, f"Expected STALE, got {state}"
+
+    def test_classify_dim_at_tau_hi(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat == tau_hi is DIM (inclusive)
+        state = router.classify(tau_hat=2.0, S=typical_S)
+        assert state == RouterState.DIM, f"Expected DIM at tau_hi boundary, got {state}"
+
+    def test_classify_dim_at_tau_min(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat == tau_min is DIM (inclusive)
+        state = router.classify(tau_hat=5.0, S=typical_S)
+        # tau_hi=2, tau_min=5: tau_hat=5 is within [tau_hi, tau_min] so DIM
+        state = router.classify(tau_hat=5.0, S=typical_S)
+        assert state == RouterState.DIM, f"Expected DIM at tau_min boundary, got {state}"
+
+    def test_classify_high_strictly_above_tau_min(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat = 5.1 > tau_min (5) → HIGH (HIGH requires exceeding the pessimistic threshold)
+        state = router.classify(tau_hat=5.1, S=typical_S)
+        assert state == RouterState.HIGH, f"Expected HIGH for tau_hat > tau_min, got {state}"
+
+    def test_classify_stale_strictly_below_tau_hi(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat = 1.9 < tau_hi (2) → STALE (strictly below the optimistic threshold)
+        state = router.classify(tau_hat=1.9, S=typical_S)
+        assert state == RouterState.STALE, f"Expected STALE for tau_hat < tau_hi, got {state}"
+
+    def test_classify_dim_in_middle(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat = 3.5 is between tau_hi (2) and tau_min (5) → DIM
+        state = router.classify(tau_hat=3.5, S=typical_S)
+        assert state == RouterState.DIM, f"Expected DIM for 2 < tau_hat < 5, got {state}"
+
+    def test_all_three_states_reachable(self, router, typical_S):
+        from bvh_rssm.causal.router import RouterState
+        states = {
+            router.classify(tau_hat=10.0, S=typical_S),  # HIGH
+            router.classify(tau_hat=3.5, S=typical_S),   # DIM
+            router.classify(tau_hat=1.0, S=typical_S),   # STALE
+        }
+        assert RouterState.HIGH in states
+        assert RouterState.DIM in states
+        assert RouterState.STALE in states
+
+
+class TestImaginationHorizon:
+    @pytest.fixture
+    def router(self):
+        from bvh_rssm.causal.router import AdaptivePolicyRouter
+        return AdaptivePolicyRouter()
+
+    def test_high_returns_full_horizon(self, router):
+        from bvh_rssm.causal.router import RouterState
+        assert router.imagination_horizon(RouterState.HIGH, tau_hat=12.0, full_horizon=16) == 16
+
+    def test_high_respects_custom_full_horizon(self, router):
+        from bvh_rssm.causal.router import RouterState
+        assert router.imagination_horizon(RouterState.HIGH, tau_hat=5.0, full_horizon=32) == 32
+
+    def test_stale_returns_one(self, router):
+        from bvh_rssm.causal.router import RouterState
+        assert router.imagination_horizon(RouterState.STALE, tau_hat=0.5, full_horizon=16) == 1
+
+    def test_stale_always_returns_one_regardless_of_tau(self, router):
+        from bvh_rssm.causal.router import RouterState
+        for tau in [0.0, 0.5, 1.0, 2.0, 100.0]:
+            result = router.imagination_horizon(RouterState.STALE, tau_hat=tau, full_horizon=16)
+            assert result == 1, f"STALE must return 1 for tau_hat={tau}, got {result}"
+
+    def test_dim_is_half_tau_hat_int(self, router):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat=6.0 → int(6.0/2) = 3
+        assert router.imagination_horizon(RouterState.DIM, tau_hat=6.0, full_horizon=16) == 3
+
+    def test_dim_floors_correctly(self, router):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat=7.0 → int(7.0/2) = 3
+        assert router.imagination_horizon(RouterState.DIM, tau_hat=7.0, full_horizon=16) == 3
+
+    def test_dim_minimum_is_one(self, router):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat=0.0 → max(1, int(0/2)) = max(1, 0) = 1
+        assert router.imagination_horizon(RouterState.DIM, tau_hat=0.0, full_horizon=16) == 1
+
+    def test_dim_minimum_for_small_tau_hat(self, router):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat=1.5 → int(1.5/2) = 0 → max(1, 0) = 1
+        assert router.imagination_horizon(RouterState.DIM, tau_hat=1.5, full_horizon=16) == 1
+
+    def test_dim_large_tau_hat(self, router):
+        from bvh_rssm.causal.router import RouterState
+        # tau_hat=20.0 → int(20/2) = 10
+        assert router.imagination_horizon(RouterState.DIM, tau_hat=20.0, full_horizon=16) == 10
+
+    def test_return_type_is_int(self, router):
+        from bvh_rssm.causal.router import RouterState
+        result = router.imagination_horizon(RouterState.HIGH, tau_hat=5.0, full_horizon=16)
+        assert isinstance(result, int), f"Expected int, got {type(result)}"
