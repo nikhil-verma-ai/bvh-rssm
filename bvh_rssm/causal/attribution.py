@@ -5,16 +5,16 @@ Levels:
   1. Associational: P(τ | latent, action) — standard forward pass through tau_head.
   2. Interventional: do(a=alt_action) — imagine next state with alt_action,
      query tau_head on resulting latent.
-  3. Counterfactual: same z_t as factual, different action — restore RNG to
-     the state captured before the factual imagine call, re-run imagine with
-     alt_action so the stochastic z_t sample is identical.
+  3. Counterfactual: same z_t as factual, different action — restores the
+     global RNG to rng_state, runs imagine(), then rng_snapshot() restores
+     RNG to its pre-call position so the caller's random stream is unaffected.
 
 Invariants:
   - No trainable parameters. All three methods run under torch.no_grad()
     implicitly (the caller controls grad context if needed).
   - rssm_state is never mutated. imagine() returns a new State namedtuple.
-  - counterfactual() restores the global RNG to rng_state before the imagine call,
-    pinning z_t to its factual value (abduction of exogenous noise u_z).
+  - counterfactual() uses rng_snapshot() to guarantee the caller's RNG stream
+    is fully restored after the call returns.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from torch import Tensor
 from bvh_rssm.networks.rssm import RSSM, State
 from bvh_rssm.networks.encoder import Encoder
 from bvh_rssm.networks.heads import ValidityHead
-from bvh_rssm.utils.rng import restore_rng_states
+from bvh_rssm.utils.rng import restore_rng_states, rng_snapshot
 
 
 class CausalAttributor:
@@ -99,9 +99,9 @@ class CausalAttributor:
         effectively abduction of the exogenous noise variable u_z.
 
         The global RNG is rewound to rng_state before imagine() so that z_t
-        noise is identical to the factual trajectory. After the call, the RNG
-        is at the position where rng_state was captured (the factual pre-imagine
-        snapshot), not at the call-site — callers should be aware of this.
+        noise is identical to the factual trajectory. After the call,
+        rng_snapshot() restores the global RNG to its position before
+        counterfactual() was called — the caller's RNG stream is unaffected.
 
         Args:
             rssm_state: State(h, z) — same as used in the factual trajectory.
@@ -112,13 +112,14 @@ class CausalAttributor:
         Returns:
             tau_hat: [B], decoded expected horizon from counterfactual state.
         """
-        # Restore the factual pre-imagine RNG snapshot so _sample_z draws the
-        # same z_t noise as in the factual trajectory (abduction of u_z).
-        # We leave the RNG at rng_state on exit — the caller's RNG is effectively
-        # "rewound" to the factual pre-imagine position, which is the contract
-        # the test suite verifies.
-        restore_rng_states(rng_state)
-        _, next_state = self.rssm.imagine(alt_action, rssm_state)
+        # rng_snapshot() captures the caller's current RNG position and restores
+        # it on context exit, so the caller's random stream is never polluted.
+        # Inside the snapshot, restore_rng_states() rewinds to the pre-imagine
+        # snapshot so _sample_z draws the same z_t noise as the factual trajectory
+        # (abduction of exogenous noise u_z).
+        with rng_snapshot():
+            restore_rng_states(rng_state)
+            _, next_state = self.rssm.imagine(alt_action, rssm_state)
 
         latent = self.rssm.get_latent(next_state)
         logits = self.tau_head(latent, alt_action, stop_grad=False)

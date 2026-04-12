@@ -57,6 +57,16 @@ def rssm_state(models):
     return state
 
 
+@pytest.fixture
+def alt_action():
+    return torch.randn(B, ACTION_DIM)
+
+
+@pytest.fixture
+def rng_state():
+    return save_rng_state()
+
+
 # ---------------------------------------------------------------------------
 # Task 1: CausalAttributor
 # ---------------------------------------------------------------------------
@@ -191,37 +201,25 @@ class TestCausalAttributorCounterfactual:
             "the same action must produce identical tau_hat"
         )
 
-    def test_rng_restored_after_call(self, attributor, rssm_state):
-        """counterfactual() must restore the caller's RNG state after returning,
-        so it does not pollute the caller's random stream."""
-        # Advance RNG to a non-trivial position, then snapshot
-        _ = torch.randn(100)
-        rng_state = save_rng_state()
-        # Draw the reference sample
-        ref_sample = torch.randn(5)
-        # Restore and run counterfactual
-        from bvh_rssm.utils.rng import restore_rng_states
-        restore_rng_states(rng_state)
-        alt_action = torch.randn(B, ACTION_DIM)  # this advances RNG
-        # Re-restore and capture counterfactual
-        restore_rng_states(rng_state)
-        # Now check: after counterfactual, the CALLER's RNG should be where it was
-        # after save_rng_state(), because counterfactual restores on exit.
-        # We verify by drawing again after counterfactual and comparing to ref.
-        rng_state_for_cf = save_rng_state()
-        _ = torch.randn(50)  # advance past CF call point
-        after_advance = torch.randn(5)
-        # Reset to the point just before CF was called, run CF, draw after
-        restore_rng_states(rng_state_for_cf)
-        alt_action2 = torch.randn(B, ACTION_DIM)
-        attributor.counterfactual(rssm_state, alt_action2, rng_state_for_cf)
-        # RNG must be back to rng_state_for_cf after counterfactual returns
-        sample_after_cf = torch.randn(5)
-        restore_rng_states(rng_state_for_cf)
-        sample_reference = torch.randn(5)
-        assert torch.allclose(sample_after_cf, sample_reference), (
-            "counterfactual() must restore caller RNG on exit"
-        )
+    def test_rng_restored_after_call(self, attributor, rssm_state, alt_action, rng_state):
+        """RNG must be fully restored after counterfactual() returns.
+
+        Force the RSSM into training mode so imagine() calls _sample_z and
+        actually consumes RNG. After counterfactual(), the global RNG must
+        be back to where it was before the call.
+        """
+        import torch
+        # Force training mode so _sample_z samples (eval uses argmax)
+        attributor.rssm.train()
+        try:
+            pre_call_rng = torch.get_rng_state()
+            attributor.counterfactual(rssm_state, alt_action, rng_state)
+            post_call_rng = torch.get_rng_state()
+            assert torch.equal(pre_call_rng, post_call_rng), (
+                "RNG state must be identical before and after counterfactual() call"
+            )
+        finally:
+            attributor.rssm.eval()
 
     def test_does_not_mutate_rssm_state(self, attributor, rssm_state):
         """counterfactual() must not modify rssm_state in place."""
