@@ -24,6 +24,8 @@ from __future__ import annotations
 from io import BytesIO
 from typing import List, Optional
 
+import math
+
 import torch
 import torch.nn as nn
 
@@ -236,26 +238,36 @@ class Predictor:
             # encoder output (embed_dim) = last linear weight out_dim
             # Find the last linear in encoder by scanning keys
             enc_keys = [k for k in state_dict if k.startswith("encoder.")]
-            embed_dim = max(
-                state_dict[k].shape[0]
-                for k in enc_keys
-                if k.endswith(".weight") and len(state_dict[k].shape) == 2
+            # embed_dim = output of the last linear layer in the encoder
+            # Sort encoder weight keys numerically to find the last layer
+            enc_weight_keys = sorted(
+                (k for k in enc_keys if k.endswith(".weight") and len(state_dict[k].shape) == 2),
+                key=lambda k: int(k.split(".")[-2]),
             )
+            embed_dim = state_dict[enc_weight_keys[-1]].shape[0]
             # rssm.gru_cell.weight_ih shape: [3*h_dim, z_dim + action_dim]
             gru_ih = state_dict["rssm.gru_cell.weight_ih"]
             h_dim = gru_ih.shape[0] // 3
             # rssm.prior_head output: z_cats * z_classes
-            prior_out = state_dict["rssm.prior_head.net.-1.weight"].shape[0]
+            # Find last linear layer in prior_head by sorting net.N.weight keys numerically
+            prior_keys = sorted(
+                (k for k in state_dict if k.startswith("rssm.prior_head.net.") and k.endswith(".weight")),
+                key=lambda k: int(k.split(".")[-2]),
+            )
+            prior_out = state_dict[prior_keys[-1]].shape[0]
             # z_cats inferred from posterior head input vs h_dim
             # posterior input = h_dim + embed_dim; output = z_cats * z_classes
             # We need z_cats: assume z_cats=z_classes=sqrt(prior_out) if square
-            import math
             side = int(math.sqrt(prior_out))
             z_cats = side
             z_classes = side
             # hazard head source_b output
-            hz_w = state_dict["hazard_head.source_b.net.-1.weight"]
-            n_intervals = hz_w.shape[0]
+            # Find last linear layer in hazard_head.source_b by sorting numerically
+            hz_keys = sorted(
+                (k for k in state_dict if k.startswith("hazard_head.source_b.net.") and k.endswith(".weight")),
+                key=lambda k: int(k.split(".")[-2]),
+            )
+            n_intervals = state_dict[hz_keys[-1]].shape[0]
             # action_dim from tau_head action_embed
             action_embed_w = state_dict["tau_head.action_embed.net.0.weight"]
             action_dim = action_embed_w.shape[1]
