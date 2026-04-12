@@ -6,9 +6,9 @@ Uses the survival curve S(t) from HazardHead to derive two thresholds:
   tau_min: first interval index where S(t) <= 0.20 (20th-pct survival time)
 
 Classification of tau_hat (scalar float, expected validity steps):
-  HIGH  : tau_hat > tau_hi  — confident, use full imagination horizon
-  DIM   : tau_min <= tau_hat <= tau_hi  — uncertain, halve the horizon
-  STALE : tau_hat < tau_min  — expired, trigger refresh (horizon=1)
+  HIGH  : tau_hat > tau_min — validity exceeds pessimistic threshold; full horizon
+  DIM   : tau_hi <= tau_hat <= tau_min — uncertain zone; halve the horizon
+  STALE : tau_hat < tau_hi  — below optimistic threshold; trigger refresh (horizon=1)
 
 All methods are stateless. No nn.Module. No stored tensors.
 """
@@ -41,7 +41,7 @@ class AdaptivePolicyRouter:
         fallback (the model is very confident; keep the last valid index).
 
         Args:
-            S: Non-increasing survival probabilities of shape [K].
+            S: Non-increasing survival probabilities of shape [K], K >= 1.
 
         Returns:
             (tau_hi, tau_min): Integer indices (0-based) where:
@@ -49,15 +49,20 @@ class AdaptivePolicyRouter:
               tau_min = first t where S[t] <= 0.20
         """
         K = S.shape[0]
+        if K == 0:
+            raise ValueError(
+                "thresholds_from_survival requires S of shape [K] with K >= 1, got K=0"
+            )
 
-        # torch.nonzero returns a [N, 1] tensor of indices; squeeze to 1-D.
+        # torch.nonzero with as_tuple=True returns a tuple of 1-D index tensors,
+        # avoiding the deprecated as_tuple=False path and the extra squeeze step.
         # The mask S <= threshold is True at all crossing points; we want the
         # first (leftmost) such index.
-        hi_mask = (S <= 0.80).nonzero(as_tuple=False).squeeze(-1)
-        tau_hi: int = int(hi_mask[0].item()) if hi_mask.numel() > 0 else K - 1
+        hi_indices = (S <= 0.80).nonzero(as_tuple=True)[0]
+        tau_hi: int = int(hi_indices[0].item()) if hi_indices.numel() > 0 else K - 1
 
-        min_mask = (S <= 0.20).nonzero(as_tuple=False).squeeze(-1)
-        tau_min: int = int(min_mask[0].item()) if min_mask.numel() > 0 else K - 1
+        min_indices = (S <= 0.20).nonzero(as_tuple=True)[0]
+        tau_min: int = int(min_indices[0].item()) if min_indices.numel() > 0 else K - 1
 
         return tau_hi, tau_min
 
@@ -81,9 +86,8 @@ class AdaptivePolicyRouter:
             RouterState: HIGH, DIM, or STALE.
         """
         tau_hi, tau_min = self.thresholds_from_survival(S)
-        # Check STALE first: tau_hat strictly below the pessimistic (tau_min) boundary.
-        # Note: tau_hi <= tau_min in index-space, so we must check tau_min before tau_hi
-        # to avoid misclassifying the DIM region [tau_hi, tau_min) as HIGH.
+        # tau_hi <= tau_min in index-space (80% threshold crossed before 20% threshold).
+        # Check HIGH first: tau_hat exceeds the pessimistic boundary (tau_min).
         if tau_hat > tau_min:
             return RouterState.HIGH
         elif tau_hat < tau_hi:
