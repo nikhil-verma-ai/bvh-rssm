@@ -46,10 +46,11 @@ This confirms head training did not perturb the world model's latent representat
 | τ loss decreasing | ✓ PASS |
 | Beats naive mean MAE | ✓ PASS |
 | Beats naive zero MAE | ✓ PASS |
-| Prediction not collapsed | ✗ FAIL |
-| C-index > 0.65 | — 0.504 |
+| Prediction not collapsed | ✗ FAIL (pred_std=0.31, threshold >0.5) |
 
 **6/7 checks passing.**
+
+**Note:** C-index (0.504) is reported as an informational metric, not a gating check. ShiftPendulum's Poisson shift process makes ranking theoretically difficult at chance; see C-index Note below.
 
 ### C-index Note
 
