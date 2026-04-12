@@ -22,7 +22,7 @@ class TrainerConfig:
     """Trainer configuration (populated from Hydra config)."""
     phase1_steps: int = 100_000
     phase2_steps: int = 50_000
-    phase3_steps: int = 200_000
+    phase3_steps: int = 0
     learning_rate: float = 1e-4
     grad_clip: float = 100.0
     batch_size: int = 16
@@ -190,4 +190,10 @@ class Trainer:
         """Run all three phases sequentially."""
         self.train_phase1()
         self.train_phase2()
-        # Phase 3: joint fine-tuning — implemented in Plan 6
+        if self.cfg.phase3_steps > 0:
+            import warnings
+            warnings.warn(
+                f"phase3_steps={self.cfg.phase3_steps} but Phase 3 is not yet implemented. "
+                "Skipping. Implement train_phase3() in Plan 6.",
+                stacklevel=2,
+            )
