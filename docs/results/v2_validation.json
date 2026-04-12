@@ -1,0 +1,50 @@
+{
+  "config": {
+    "shift_rate": 100.0,
+    "seed_steps": 1000,
+    "p1_steps": 100000,
+    "p2_steps": 50000,
+    "K": 16,
+    "device": "mps",
+    "grad_clip": 5.0,
+    "online": true,
+    "skip_p1": null,
+    "save_p1": "checkpoints/p1_joint.pt"
+  },
+  "phase1": {
+    "loss_early": 7.687116801738739,
+    "loss_late": 1.894087541103363,
+    "pred_early": 6.631445717811585,
+    "pred_late": 0.8915280543034896,
+    "kl_before": 0.004276745789684355,
+    "kl_after": 0.5331119768321514,
+    "skipped": false
+  },
+  "phase2": {
+    "tau_loss_early": 3.5174904346466063,
+    "tau_loss_late": 3.48319149017334,
+    "kl_before": 0.5343994056805969,
+    "kl_after": 0.5332154957577586,
+    "kl_increase": -0.0011839099228382333
+  },
+  "eval_metrics": {
+    "mae_tau": 7.24162483215332,
+    "naive_mean_mae": 7.596459865570068,
+    "naive_zero_mae": 10.9399995803833,
+    "pred_std": 0.31000423431396484,
+    "pred_variance": 0.09610261768102646,
+    "c_index": 0.5037354067623779,
+    "brier_score": 0.19971280670587607,
+    "n_samples": 2000
+  },
+  "pass_fail": {
+    "p1_loss_decreasing": true,
+    "kl_not_collapsed": true,
+    "stopgrad_ok": true,
+    "tau_loss_decreasing": true,
+    "beats_naive_mean": true,
+    "beats_naive_zero": true,
+    "prediction_not_collapsed": false,
+    "c_index": 0.5037354067623779
+  }
+}
