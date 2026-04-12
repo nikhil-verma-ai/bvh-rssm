@@ -28,6 +28,11 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    # Ensure cuDNN uses deterministic algorithms on GPU
+    # Note: torch.use_deterministic_algorithms(True) may raise errors for non-deterministic ops.
+    # We set the softer flags here; callers can upgrade to strict mode if needed.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 class Checkpointer:
@@ -71,7 +76,7 @@ class Checkpointer:
 
     def load(self, phase: int, step: int) -> Dict[str, Any]:
         """Load checkpoint by phase and step."""
-        path = self._path(phase, step)
+        path = self.run_dir / f"phase{phase}" / f"step{step}.pt"
         return torch.load(path, map_location="cpu", weights_only=False)
 
     def load_latest(self, phase: int) -> Optional[Dict[str, Any]]:
@@ -91,9 +96,11 @@ class Checkpointer:
 
 
 def init_wandb(config: Dict[str, Any], run_name: str, project: str = "bvh-rssm") -> None:
-    """Initialize wandb run. No-op if wandb is not installed."""
+    """Initialize wandb run. No-op if wandb not installed or already running."""
     try:
         import wandb
+        if wandb.run is not None:
+            return  # already initialized — idempotent
         wandb.init(project=project, name=run_name, config=config)
     except ImportError:
         pass

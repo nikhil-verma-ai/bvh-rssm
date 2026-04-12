@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 import tempfile
 import os
+from pathlib import Path
 from bvh_rssm.training.experiment import set_seed, Checkpointer
 
 
@@ -44,3 +45,24 @@ def test_checkpointer_latest():
         ckpt.save(model, optimizer, phase=1, step=1000)
         state = ckpt.load_latest(phase=1)
         assert state["step"] == 1000
+
+
+def test_checkpointer_load_latest_nonexistent_phase():
+    """load_latest returns None when phase directory doesn't exist."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ckpt = Checkpointer(run_dir=tmpdir)
+        result = ckpt.load_latest(phase=99)
+        assert result is None
+
+
+def test_checkpointer_load_does_not_create_phantom_dir():
+    """load() must not create directories as a side effect."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ckpt = Checkpointer(run_dir=tmpdir)
+        try:
+            ckpt.load(phase=1, step=0)
+        except FileNotFoundError:
+            pass  # expected — file doesn't exist
+        # The phase directory must NOT have been created
+        phase_dir = (ckpt.run_dir / "phase1")
+        assert not phase_dir.exists(), "load() must not create phantom directories"
