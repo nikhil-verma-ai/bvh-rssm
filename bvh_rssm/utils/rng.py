@@ -14,11 +14,11 @@ trajectory rollout — used to hold z_t noise fixed under action intervention.
 from __future__ import annotations
 
 import contextlib
-from contextlib import contextmanager
-from typing import Any, Dict, Generator, List
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
+from torch import Tensor
 
 
 # ---------------------------------------------------------------------------
@@ -29,13 +29,13 @@ class RNGStateStore:
     """Captures and restores PyTorch CPU RNG states for deterministic replay."""
 
     def __init__(self) -> None:
-        self._states: List[torch.ByteTensor] = []
+        self._states: List[Tensor] = []
 
-    def capture(self) -> torch.ByteTensor:
+    def capture(self) -> Tensor:
         """Capture current CPU RNG state and append to internal list.
 
         Returns:
-            The captured ByteTensor state (also stored internally at len-1 index).
+            The captured state tensor (also stored internally at len-1 index).
         """
         state = torch.get_rng_state()
         self._states.append(state)
@@ -49,14 +49,14 @@ class RNGStateStore:
         """
         torch.set_rng_state(self._states[idx])
 
-    def get(self, idx: int) -> torch.ByteTensor:
+    def get(self, idx: int) -> Tensor:
         """Return the stored state at the given index without restoring it.
 
         Args:
             idx: Index into the internal states list (0-based).
 
         Returns:
-            The ByteTensor state at that index.
+            The RNG state tensor at that index.
         """
         return self._states[idx]
 

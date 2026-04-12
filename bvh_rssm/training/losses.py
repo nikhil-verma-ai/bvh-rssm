@@ -23,13 +23,19 @@ References:
 from __future__ import annotations
 
 import math
-from typing import Dict
+from typing import TYPE_CHECKING, Dict
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
 from bvh_rssm.utils import symlog, unimix
+
+if TYPE_CHECKING:
+    from bvh_rssm.networks.encoder import Encoder
+    from bvh_rssm.networks.decoder import Decoder
+    from bvh_rssm.networks.rssm import RSSM
+    from bvh_rssm.networks.heads import RewardHead, ContinueHead, ValidityHead, HazardHead
 
 
 def kl_loss(
@@ -78,15 +84,16 @@ def world_model_loss(
     actions: Tensor,
     rewards: Tensor,
     continues: Tensor,
-    encoder,
-    decoder,
-    rssm,
-    reward_head,
-    continue_head,
+    encoder: Encoder,
+    decoder: Decoder,
+    rssm: RSSM,
+    reward_head: RewardHead,
+    continue_head: ContinueHead,
     kl_dynamics_scale: float = 0.8,
     kl_repr_scale: float = 0.2,
     free_bits: float = 1.0,
     unimix_eps: float = 0.01,
+    return_latents: bool = False,
 ) -> Dict[str, Tensor]:
     """Full DreamerV3-style world model loss over T timesteps.
 
@@ -128,9 +135,9 @@ def world_model_loss(
     state = rssm.initial_state(B, device=device)
 
     # Accumulators
-    post_logits_list = []
-    prior_logits_list = []
-    latents_list = []
+    post_logits_list: list[Tensor] = []
+    prior_logits_list: list[Tensor] = []
+    latents_list: list[Tensor] = []
 
     # Unroll over time — observe uses action_{t-1} to step GRU before incorporating obs_t
     for t in range(T):
@@ -193,16 +200,21 @@ def world_model_loss(
 
     total = pred_loss + kl_dynamics_scale * dyn_loss + kl_repr_scale * repr_loss
 
-    return {
+    result = {
         "total": total,
         "prediction": pred_loss,
         "dynamics": dyn_loss,
         "representation": repr_loss,
     }
+    if return_latents:
+        # latents_flat: [B*T, latent_dim] — used by auxiliary τ loss in joint P1 training
+        result["latents_flat"] = latents_flat
+        result["actions_flat"] = actions.reshape(B * T, -1)
+    return result
 
 
 def validity_loss(
-    tau_head,
+    tau_head: ValidityHead,
     latent: Tensor,
     action: Tensor,
     oracle_tau: Tensor,
@@ -255,7 +267,7 @@ def counterfactual_loss(
 
 
 def survival_loss(
-    hazard_head,
+    hazard_head: HazardHead,
     latent: Tensor,
     event_times: Tensor,
     event_occurred: Tensor,

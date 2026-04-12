@@ -106,17 +106,18 @@ class ReplayBuffer:
             [((oldest + s + t) % self.capacity) for s in logical_starts for t in range(T)]
         ).reshape(batch_size, T)
 
-        batch = {
-            "obs": torch.from_numpy(self._obs[indices]),
-            "action": torch.from_numpy(self._action[indices]),
-            "reward": torch.from_numpy(self._reward[indices]),
-            "terminated": torch.from_numpy(self._terminated[indices]),
-            "oracle_tau": torch.from_numpy(self._oracle_tau[indices]),
-            "is_interventionist": torch.from_numpy(self._is_interventionist[indices]),
-            "rng_states": [
-                [self._rng_states[indices[b, t]] for t in range(T)]
-                for b in range(batch_size)
-            ],
+        rng_states: List[List[Optional[Dict[str, Any]]]] = [
+            [self._rng_states[indices[b, t]] for t in range(T)]
+            for b in range(batch_size)
+        ]
+        batch: Dict[str, Any] = {
+            "obs": torch.from_numpy(self._obs[indices]),            # type: ignore[reportUnknownMemberType]
+            "action": torch.from_numpy(self._action[indices]),      # type: ignore[reportUnknownMemberType]
+            "reward": torch.from_numpy(self._reward[indices]),      # type: ignore[reportUnknownMemberType]
+            "terminated": torch.from_numpy(self._terminated[indices]),  # type: ignore[reportUnknownMemberType]
+            "oracle_tau": torch.from_numpy(self._oracle_tau[indices]),  # type: ignore[reportUnknownMemberType]
+            "is_interventionist": torch.from_numpy(self._is_interventionist[indices]),  # type: ignore[reportUnknownMemberType]
+            "rng_states": rng_states,
         }
         return batch
 

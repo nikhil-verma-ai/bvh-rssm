@@ -19,8 +19,7 @@ Key design decisions:
 """
 from __future__ import annotations
 
-from typing import Tuple
-from collections import namedtuple
+from typing import NamedTuple, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -29,8 +28,12 @@ from torch import Tensor
 from bvh_rssm.networks.common import MLP
 from bvh_rssm.utils import unimix, straight_through_sample, sample_categorical
 
-# State namedtuple used everywhere in the codebase
-State = namedtuple("State", ["h", "z"])
+
+class State(NamedTuple):
+    """Typed RSSM state: deterministic recurrent state h and stochastic latent z."""
+
+    h: Tensor  # [B, h_dim] — GRU hidden state
+    z: Tensor  # [B, z_cats * z_classes] — flat one-hot stochastic latent
 
 
 class RSSM(nn.Module):
@@ -82,7 +85,7 @@ class RSSM(nn.Module):
             n_layers=1,
         )
 
-    def initial_state(self, batch_size: int, device: torch.device = None) -> State:
+    def initial_state(self, batch_size: int, device: Optional[torch.device] = None) -> State:
         """Return zero-initialized RSSM state for the start of an episode.
 
         Args:

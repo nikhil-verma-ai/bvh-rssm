@@ -42,6 +42,8 @@ class RewardHead(nn.Module):
             (default) bins are created via ``symlog_bins(n_bins)``.
     """
 
+    bins: Tensor  # registered buffer — declared here so pyright knows the type
+
     def __init__(
         self,
         latent_dim: int,
@@ -180,6 +182,8 @@ class ValidityHead(nn.Module):
         hidden_dim: MLP hidden width.
         max_horizon: Maximum predictable horizon in steps (default 1000).
     """
+
+    bins: Tensor  # registered buffer — declared here so pyright knows the type
 
     def __init__(
         self,

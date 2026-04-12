@@ -6,7 +6,6 @@ keep this file focused on building blocks only.
 """
 from __future__ import annotations
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 

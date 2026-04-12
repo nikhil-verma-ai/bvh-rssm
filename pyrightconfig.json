@@ -1,0 +1,18 @@
+{
+  "include": ["bvh_rssm"],
+  "strict": [
+    "bvh_rssm/networks",
+    "bvh_rssm/training/losses.py",
+    "bvh_rssm/training/replay_buffer.py",
+    "bvh_rssm/utils"
+  ],
+  "ignore": [
+    "bvh_rssm/envs",
+    "bvh_rssm/training/trainer.py",
+    "bvh_rssm/training/collector.py",
+    "bvh_rssm/training/experiment.py",
+    "bvh_rssm/training/baselines",
+    "bvh_rssm/training/metrics.py",
+    "bvh_rssm/serving"
+  ]
+}

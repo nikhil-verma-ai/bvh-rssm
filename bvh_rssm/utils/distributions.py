@@ -18,6 +18,7 @@ and the corresponding entry gradient flows to that logit correctly.
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from typing import cast
 
 
 class _STEFunction(torch.autograd.Function):
@@ -60,7 +61,7 @@ def straight_through_sample(logits: Tensor) -> Tensor:
     probs = logits.softmax(-1)
     indices = probs.argmax(-1)                                          # [*batch, n_cats]
     one_hot = F.one_hot(indices, num_classes=logits.shape[-1]).float()  # [*batch, n_cats, n_classes]
-    return _STEFunction.apply(one_hot, logits)
+    return cast(Tensor, _STEFunction.apply(one_hot, logits))  # type: ignore[reportUnknownMemberType]
 
 
 def sample_categorical(logits: Tensor) -> Tensor:
@@ -85,4 +86,4 @@ def sample_categorical(logits: Tensor) -> Tensor:
     indices = indices.reshape(batch_shape)                               # [*batch]
 
     one_hot = F.one_hot(indices, num_classes=n_classes).float()         # [*batch, n_classes]
-    return _STEFunction.apply(one_hot, logits)
+    return cast(Tensor, _STEFunction.apply(one_hot, logits))  # type: ignore[reportUnknownMemberType]

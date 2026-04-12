@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Tuple
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 
@@ -89,5 +88,5 @@ class Decoder(nn.Module):
         log_std_scalar = out[..., self.obs_dim:]
         log_std = log_std_scalar.expand(
             *out.shape[:-1], self.obs_dim
-        ).clamp(-5.0, 5.0)
+        ).clamp(-2.0, 2.0)  # std ∈ [e^-2, e^2]=[0.135, 7.4]; floor at -5 caused NaN spikes
         return mean_symlog, log_std

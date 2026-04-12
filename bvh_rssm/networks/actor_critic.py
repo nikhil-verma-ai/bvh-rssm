@@ -17,11 +17,10 @@ from __future__ import annotations
 
 from typing import Tuple, Union
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 
-from bvh_rssm.networks.common import MLP, LayerNormMLP
+from bvh_rssm.networks.common import LayerNormMLP
 
 _LOG_STD_MIN = -5.0
 _LOG_STD_MAX = 2.0
