@@ -290,10 +290,13 @@ class HazardHead(nn.Module):
         # sigmoid(-5) ≈ 0.007 — effectively zero contribution to combined hazard.
         with torch.no_grad():
             for m in [self.source_a, self.source_c]:
-                for layer in m.net:
-                    if isinstance(layer, nn.Linear):
-                        layer.weight.data.zero_()
-                        layer.bias.data.fill_(-5.0)
+                # Only zero the final projection layer — keep intermediate Kaiming init
+                # so sources A/C have a viable weight landscape when activated in Phase 3
+                final_layer = m.net[-1]
+                assert isinstance(final_layer, nn.Linear), \
+                    f"Expected final MLP layer to be Linear, got {type(final_layer)}"
+                final_layer.weight.data.zero_()
+                final_layer.bias.data.fill_(-5.0)  # sigmoid(-5) ≈ 0.007
 
     def forward(self, latent: Tensor):
         """Return per-source hazard probabilities.
@@ -355,13 +358,17 @@ class HazardHead(nn.Module):
         _, h_B, _ = self.forward(latent)
         B, K = h_B.shape
 
+        t = event_times.long().clamp(0, K - 1)                          # [B]
+        arange = torch.arange(K, device=latent.device).unsqueeze(0)     # [1, K]
+
+        # mask[b, i] = 1 iff i <= t[b]
+        mask = (arange <= t.unsqueeze(1)).float()                        # [B, K]
+
+        # targets[b, t[b]] = 1 iff event_occurred[b]
         targets = torch.zeros(B, K, device=latent.device)
-        mask = torch.zeros(B, K, device=latent.device)
-        for b in range(B):
-            t = event_times[b].long().clamp(0, K - 1)
-            if event_occurred[b]:
-                targets[b, t] = 1.0
-            mask[b, : t + 1] = 1.0
+        obs_idx = event_occurred.bool().nonzero(as_tuple=True)[0]        # indices of observed events
+        if obs_idx.numel() > 0:
+            targets[obs_idx, t[obs_idx]] = 1.0
 
         bce = F.binary_cross_entropy(h_B, targets, reduction="none")
         return (bce * mask).sum() / mask.sum().clamp(min=1.0)

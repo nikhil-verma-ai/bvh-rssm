@@ -123,7 +123,7 @@ class TestHazardHead:
         latent = torch.randn(4, self.latent_dim)
         S = self.head.survival(latent)
         diffs = S[:, 1:] - S[:, :-1]
-        assert (diffs <= 1e-6).all(), "Survival function must be non-increasing"
+        assert (diffs <= 0).all(), "Survival function must be non-increasing"
 
     def test_survival_bounded(self):
         """S(t) must be in (0, 1] for all t."""
@@ -149,3 +149,12 @@ class TestHazardHead:
 
     def test_n_intervals_stored(self):
         assert self.head.n_intervals == self.n_intervals
+
+    def test_source_ac_near_zero_at_init(self):
+        """Sources A and C must produce near-zero hazard at init (sigmoid(-5) ≈ 0.007)."""
+        latent = torch.randn(32, self.latent_dim)
+        with torch.no_grad():
+            h_A, _, h_C = self.head(latent)
+        # sigmoid(-5) ≈ 0.0067; allow 3x margin for variance in intermediate activations
+        assert h_A.mean().item() < 0.02, f"Source A mean hazard too high: {h_A.mean().item():.4f}"
+        assert h_C.mean().item() < 0.02, f"Source C mean hazard too high: {h_C.mean().item():.4f}"
