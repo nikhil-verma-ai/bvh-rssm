@@ -120,8 +120,11 @@ def world_model_loss(
         unimix_eps: Uniform mixing coefficient for KL computation.
 
     Returns:
-        Dict with keys: "total", "prediction", "dynamics", "representation"
+        Dict with keys: "total", "prediction", "dynamics", "representation".
         All values are scalar Tensors.
+        If return_latents=True, also includes:
+          - "latents_flat": [B*T, latent_dim] — concatenated RSSM latents
+          - "actions_flat": [B*T, action_dim] — flattened actions
     """
     B, T, _ = obs.shape
     device = obs.device

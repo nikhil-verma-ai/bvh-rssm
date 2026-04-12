@@ -111,12 +111,12 @@ class ReplayBuffer:
             for b in range(batch_size)
         ]
         batch: Dict[str, Any] = {
-            "obs": torch.from_numpy(self._obs[indices]),            # type: ignore[reportUnknownMemberType]
-            "action": torch.from_numpy(self._action[indices]),      # type: ignore[reportUnknownMemberType]
-            "reward": torch.from_numpy(self._reward[indices]),      # type: ignore[reportUnknownMemberType]
-            "terminated": torch.from_numpy(self._terminated[indices]),  # type: ignore[reportUnknownMemberType]
-            "oracle_tau": torch.from_numpy(self._oracle_tau[indices]),  # type: ignore[reportUnknownMemberType]
-            "is_interventionist": torch.from_numpy(self._is_interventionist[indices]),  # type: ignore[reportUnknownMemberType]
+            "obs": torch.from_numpy(self._obs[indices]),            # pyright: ignore[reportUnknownMemberType]
+            "action": torch.from_numpy(self._action[indices]),      # pyright: ignore[reportUnknownMemberType]
+            "reward": torch.from_numpy(self._reward[indices]),      # pyright: ignore[reportUnknownMemberType]
+            "terminated": torch.from_numpy(self._terminated[indices]),  # pyright: ignore[reportUnknownMemberType]
+            "oracle_tau": torch.from_numpy(self._oracle_tau[indices]),  # pyright: ignore[reportUnknownMemberType]
+            "is_interventionist": torch.from_numpy(self._is_interventionist[indices]),  # pyright: ignore[reportUnknownMemberType]
             "rng_states": rng_states,
         }
         return batch

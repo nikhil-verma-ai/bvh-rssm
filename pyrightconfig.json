@@ -13,6 +13,8 @@
     "bvh_rssm/training/experiment.py",
     "bvh_rssm/training/baselines",
     "bvh_rssm/training/metrics.py",
-    "bvh_rssm/serving"
+    "bvh_rssm/serving",
+    "tests",
+    "scripts"
   ]
 }
