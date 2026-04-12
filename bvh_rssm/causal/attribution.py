@@ -13,7 +13,8 @@ Invariants:
   - No trainable parameters. All three methods run under torch.no_grad()
     implicitly (the caller controls grad context if needed).
   - rssm_state is never mutated. imagine() returns a new State namedtuple.
-  - counterfactual() restores the caller's RNG state on exit via rng_snapshot.
+  - counterfactual() restores the global RNG to rng_state before the imagine call,
+    pinning z_t to its factual value (abduction of exogenous noise u_z).
 """
 from __future__ import annotations
 
@@ -97,8 +98,10 @@ class CausalAttributor:
         to the pre-imagine snapshot guarantees the same z_t noise is drawn —
         effectively abduction of the exogenous noise variable u_z.
 
-        The caller's RNG state is restored on exit via rng_snapshot, so this
-        call does not pollute the random stream.
+        The global RNG is rewound to rng_state before imagine() so that z_t
+        noise is identical to the factual trajectory. After the call, the RNG
+        is at the position where rng_state was captured (the factual pre-imagine
+        snapshot), not at the call-site — callers should be aware of this.
 
         Args:
             rssm_state: State(h, z) — same as used in the factual trajectory.
