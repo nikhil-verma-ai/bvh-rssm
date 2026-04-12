@@ -417,3 +417,83 @@ class TestImaginationHorizon:
         from bvh_rssm.causal.router import RouterState
         result = router.imagination_horizon(RouterState.HIGH, tau_hat=5.0, full_horizon=16)
         assert isinstance(result, int), f"Expected int, got {type(result)}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: Integration smoke test
+# ---------------------------------------------------------------------------
+
+class TestIntegrationSmoke:
+    """Full pipeline: models → CausalAttributor → AdaptivePolicyRouter.
+
+    Exercises the import path from bvh_rssm.causal (not the submodule paths)
+    and verifies that all three Pearl levels + router compose without error.
+    """
+
+    def test_top_level_imports(self):
+        """All three public names must be importable from bvh_rssm.causal."""
+        from bvh_rssm.causal import CausalAttributor, AdaptivePolicyRouter, RouterState
+        assert CausalAttributor is not None
+        assert AdaptivePolicyRouter is not None
+        assert RouterState is not None
+
+    def test_full_pipeline_produces_finite_results(self):
+        """Build models, run all three levels, classify, get horizon."""
+        from bvh_rssm.causal import CausalAttributor, AdaptivePolicyRouter, RouterState
+        from bvh_rssm.utils.rng import save_rng_state
+
+        torch.manual_seed(7)
+        B_smoke = 2
+        OBS = 6
+        EMBED = 12
+        H = 24
+        ZCATS, ZCLASSES = 4, 4
+        ACT = 2
+        LATENT = H + ZCATS * ZCLASSES  # 24 + 16 = 40
+
+        rssm = RSSM(h_dim=H, z_cats=ZCATS, z_classes=ZCLASSES,
+                    obs_dim=EMBED, action_dim=ACT)
+        encoder = Encoder(obs_dim=OBS, embed_dim=EMBED)
+        tau_head = ValidityHead(latent_dim=LATENT, action_dim=ACT)
+        hazard_head = __import__(
+            'bvh_rssm.networks', fromlist=['HazardHead']
+        ).HazardHead(latent_dim=LATENT, n_intervals=16)
+
+        attributor = CausalAttributor(rssm=rssm, encoder=encoder, tau_head=tau_head)
+        router = AdaptivePolicyRouter()
+
+        rssm.eval()
+        state = rssm.initial_state(batch_size=B_smoke)
+        action = torch.randn(B_smoke, ACT)
+        _, state = rssm.imagine(action, state)
+
+        latent = rssm.get_latent(state)
+
+        # Level 1: associational
+        tau_l1 = attributor.associational(latent, action)
+        assert tau_l1.shape == (B_smoke,)
+        assert torch.isfinite(tau_l1).all()
+
+        # Level 2: interventional
+        alt_action = torch.randn(B_smoke, ACT)
+        tau_l2 = attributor.interventional(state, alt_action)
+        assert tau_l2.shape == (B_smoke,)
+        assert torch.isfinite(tau_l2).all()
+
+        # Level 3: counterfactual — need RNG captured before factual imagine step
+        rng_pre_imagine = save_rng_state()
+        _, _ = rssm.imagine(action, state)  # factual imagine (advances RNG)
+        tau_l3 = attributor.counterfactual(state, alt_action, rng_pre_imagine)
+        assert tau_l3.shape == (B_smoke,)
+        assert torch.isfinite(tau_l3).all()
+
+        # Router: classify sample 0 using its survival curve
+        S_batch = hazard_head.survival(latent)   # [B_smoke, 16]
+        S_0 = S_batch[0]                          # [16]
+        tau_scalar = tau_l1[0].item()
+        router_state = router.classify(tau_hat=tau_scalar, S=S_0)
+        assert router_state in (RouterState.HIGH, RouterState.DIM, RouterState.STALE)
+
+        horizon = router.imagination_horizon(router_state, tau_hat=tau_scalar, full_horizon=16)
+        assert isinstance(horizon, int)
+        assert 1 <= horizon <= 16
