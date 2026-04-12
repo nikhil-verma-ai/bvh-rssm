@@ -252,3 +252,75 @@ def counterfactual_loss(
         Scalar mean hinge loss.
     """
     return F.relu(tau_obs - tau_int + margin).mean()
+
+
+def survival_loss(
+    hazard_head,
+    latent: Tensor,
+    event_times: Tensor,
+    event_occurred: Tensor,
+    use_all_sources: bool = False,
+) -> Tensor:
+    """Proper discrete-time survival negative log-likelihood (Discrete-time Cox NLL).
+
+    For each sample b with event interval t_b and observed/censored flag d_b:
+      - Observed (d_b=True):  log L_b = log h(t_b) + sum_{i<t_b} log(1 - h(i))
+      - Censored (d_b=False): log L_b = sum_{i<=t_b} log(1 - h(i))
+
+    This is the exact discrete-time likelihood from Tutz & Schmid (2016), not
+    the BCE approximation in loss_source_b(). The cumsum trick vectorizes the
+    sequential summation over intervals without a Python loop.
+
+    Clamp hazards to [1e-7, 1-1e-7] before log to prevent NaN from log(0).
+
+    Args:
+        hazard_head:    HazardHead instance.
+        latent:         [B, latent_dim] — RSSM latent at this step.
+        event_times:    [B] integer interval indices (0-indexed). Clipped to [0, K-1].
+        event_occurred: [B] bool, True=observed event, False=right-censored.
+        use_all_sources: If True, use combined_hazard (all three sources A+B+C).
+                         If False, use source B only (Phase 2 training mode).
+
+    Returns:
+        Scalar NLL >= 0.
+
+    Complexity: O(B * K). All ops are vectorized — no Python loop over batch or time.
+    Side effects: None.
+    """
+    if use_all_sources:
+        h = hazard_head.combined_hazard(latent)       # [B, K]
+    else:
+        _, h, _ = hazard_head.forward(latent)         # [B, K]
+
+    B, K = h.shape
+    device = latent.device
+
+    # Clamp before taking logs to prevent log(0) → -inf → NaN propagation
+    h_clamped = h.clamp(1e-7, 1.0 - 1e-7)            # [B, K]
+    log_h = torch.log(h_clamped)                      # [B, K]: log hazard at each interval
+    log_surv = torch.log(1.0 - h_clamped)             # [B, K]: log survival increment
+
+    # Build cumulative log survival: cs[b, t] = sum_{i=0}^{t-1} log(1 - h[b,i])
+    # So cs[:, 0] = 0 (no time elapsed), cs[:, 1] = log_surv[:,0], etc.
+    # Shape: [B, K+1] — the +1 column lets us index cs_at_t1 = cs[:, t+1] without OOB.
+    cs = torch.zeros(B, K + 1, device=device, dtype=h.dtype)
+    cs[:, 1:] = torch.cumsum(log_surv, dim=-1)        # [B, K] cumsum → slots 1..K
+
+    arange_b = torch.arange(B, device=device)
+    t = event_times.long().clamp(0, K - 1)            # [B] — clip invalid indices
+    obs_mask = event_occurred.bool()                   # [B]
+
+    # Gather log-hazard at the event interval for observed samples
+    log_h_at_t = log_h[arange_b, t]                   # [B]
+
+    # cs[b, t_b]   = cumulative log-survival up to (not including) t_b
+    # cs[b, t_b+1] = cumulative log-survival up to (including) t_b
+    cs_at_t = cs[arange_b, t]                         # [B]
+    cs_at_t1 = cs[arange_b, t + 1]                   # [B] — safe since cs has K+1 cols
+
+    # Observed: log L_b = log h(t_b) + cs[b, t_b]
+    # Censored: log L_b = cs[b, t_b+1]
+    log_lik = torch.where(obs_mask, log_h_at_t + cs_at_t, cs_at_t1)  # [B]
+
+    # Return negative mean log-likelihood (minimization objective)
+    return -log_lik.mean()

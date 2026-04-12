@@ -372,3 +372,36 @@ class HazardHead(nn.Module):
 
         bce = F.binary_cross_entropy(h_B, targets, reduction="none")
         return (bce * mask).sum() / mask.sum().clamp(min=1.0)
+
+    def loss(
+        self,
+        latent: Tensor,
+        event_times: Tensor,
+        event_occurred: Tensor,
+        use_all_sources: bool = False,
+    ) -> Tensor:
+        """Proper discrete-time survival NLL. Delegates to survival_loss().
+
+        This is the statistically correct loss function (Tutz & Schmid, 2016),
+        unlike loss_source_b() which uses a BCE approximation. Use this for
+        Phase 3 joint fine-tuning where all three risk sources are active.
+
+        Imports survival_loss locally to avoid the circular import that would
+        result from a top-level import (losses.py imports heads.py indirectly
+        via the trainer, so a top-level import here would form a cycle).
+
+        Args:
+            latent:         [B, latent_dim] — RSSM latent.
+            event_times:    [B] integer interval indices (0-indexed, clipped to [0, K-1]).
+            event_occurred: [B] bool, True=observed event, False=right-censored.
+            use_all_sources: If True, use combined hazard (A+B+C); else source B only.
+
+        Returns:
+            Scalar NLL >= 0.
+        """
+        # Local import breaks the potential circular dependency:
+        # heads.py is imported by losses.py's callers (trainer.py), not by losses.py
+        # itself, so this is safe — but a module-level import would risk issues if
+        # losses.py is ever refactored to import heads.py at module scope.
+        from bvh_rssm.training.losses import survival_loss
+        return survival_loss(self, latent, event_times, event_occurred, use_all_sources)
