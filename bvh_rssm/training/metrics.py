@@ -173,7 +173,10 @@ def time_dependent_auc(
     Complexity: O(N^2 * K) — use with N <= 5000.
     """
     N, K = survival_curves.shape
-    assert K == max_t
+    if K != max_t:
+        raise ValueError(
+            f"survival_curves.shape[1]={K} does not match max_t={max_t}"
+        )
     t_vals = event_times.astype(np.int64)
     auc_per_t = np.full(K, np.nan, dtype=np.float64)
 
@@ -182,7 +185,8 @@ def time_dependent_auc(
         ctrl_mask = t_vals > t       # [N] — event hasn't happened yet
         n_cases = case_mask.sum()
         n_ctrls = ctrl_mask.sum()
-        if n_cases == 0 or n_ctrls == 0:
+        # Require at least 2 valid pairs (n_cases * n_ctrls >= 2) for a meaningful AUC
+        if n_cases * n_ctrls < 2:
             continue
 
         S_cases = survival_curves[case_mask, t]   # [n_cases]

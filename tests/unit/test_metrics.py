@@ -203,6 +203,22 @@ class TestTimeDependentAuc:
         auc_per_t, _ = time_dependent_auc(survival_curves, event_times, max_t=K)
         assert np.isnan(auc_per_t[0])
 
+    def test_nan_when_fewer_than_two_valid_pairs(self):
+        """Exactly 1 case × 1 control = 1 pair < 2 → must be nan (spec requirement)."""
+        # At t=0: event_times[0]=0 is the only case; event_times[1..3] are controls.
+        # n_cases=1, n_ctrls=3 → 3 pairs ≥ 2 → not nan.
+        # At t=K-1: all 4 are cases; n_ctrls=0 → nan.
+        # Construct so exactly one t has n_cases=1, n_ctrls=1 (1 pair < 2 → nan).
+        N, K = 2, 3
+        survival_curves = np.ones((N, K)) * 0.5
+        # event_times=[0, 1]: at t=0 → case={0}, ctrl={1} → 1*1=1 pair → nan
+        #                     at t=1 → case={0,1}, ctrl={} → 0 ctrls → nan
+        #                     at t=2 → case={0,1}, ctrl={} → 0 ctrls → nan
+        event_times = np.array([0, 1])
+        auc_per_t, _ = time_dependent_auc(survival_curves, event_times, max_t=K)
+        # t=0 has exactly 1 valid pair → spec requires nan
+        assert np.isnan(auc_per_t[0])
+
     def test_inverse_separation_gives_auc_near_0(self):
         """When cases have S=1 and controls S=0, ranking is perfectly reversed → AUC=0."""
         N, K = 6, 4
