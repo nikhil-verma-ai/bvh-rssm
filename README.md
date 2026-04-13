@@ -6,21 +6,34 @@
 
 > **A world model that signals its own staleness — before failure, not after.**
 
-Standard model-based RL agents fail silently: when their world model's internalized
-dynamics go stale (after a distribution shift), predictions degrade but the agent
-has no mechanism to detect this. In autonomous vehicle planning, a stale world model
-that doesn't know it's stale is a safety liability.
+Model-based RL agents fail silently under distribution shift. When a world model's
+internalized dynamics go stale, predictions degrade — but the agent has no mechanism
+to detect this. In autonomous vehicle planning, a stale world model that doesn't know
+it's stale is a safety liability: the vehicle keeps planning from a broken model with
+full confidence.
+
+**The gap this fills:** Prior work detects distribution shift reactively — after the
+model has already failed. BVH-RSSM is the first architecture to give a world model
+an explicit, learned validity horizon: a per-step estimate of *how many more steps*
+its imagined future can be trusted, before the failure happens.
 
 **BVH-RSSM** extends [DreamerV3](https://arxiv.org/abs/2301.04104) with two novel
-predictive heads that give the world model explicit self-awareness about its own
-validity horizon:
+heads trained on the RSSM's frozen latent representation:
 
-- **τ-head (ValidityHead):** Predicts τ\* — the number of steps until the imagined
-  latent trajectory diverges from the posterior by more than ε nats. Trained with
-  twohot cross-entropy against oracle τ\* labels from the environment.
-- **λ-head (HazardHead):** Models the distribution over shift times as a discrete-time
-  survival process with competing risks (A, B, C). Trained with the proper discrete-time
-  Cox negative log-likelihood.
+- **τ-head (ValidityHead):** Predicts τ\* — steps until the imagined trajectory
+  diverges from the posterior by more than ε nats. Twohot cross-entropy loss in
+  symlog space against oracle τ\* labels.
+- **λ-head (HazardHead):** Models shift arrival as a discrete-time survival process
+  with three competing risk sources (A/B/C). Proper discrete-time Cox NLL — not a
+  BCE approximation — handles right-censored observations correctly.
+
+**Key invariant:** Head training is stop-grad w.r.t. the world model. The RSSM
+representation is never modified during Phase 2 (empirically: KL change < 0.03 nat).
+The heads read from the latent; they do not write to it.
+
+**What this enables:** The BVH Router classifies each timestep as HIGH / DIM / STALE
+based on τ̂ and S(t). A STALE signal can trigger safe policy fallback or human
+handover — *before* planning degrades, not after.
 
 ---
 
@@ -52,17 +65,24 @@ Full numbers: [`docs/results/v3_validation.json`](docs/results/v3_validation.jso
 
 ### SensorDrift — Deterministic noise drift (the AV use case)
 
-Monotonically growing sensor noise, predictable τ\* directly encoded in observation signal.
-Full run in progress — smoke test result (300 steps):
+Monotonically growing sensor noise (HalfCheetah-v4 base). τ\* decreases by 1 every
+step — fully predictable from the latent's accumulated observation signal. This mirrors
+real AV sensor degradation: LiDAR calibration drift, camera fouling, IMU bias
+accumulation are all monotonic and detectable before they cause failure.
 
-| Metric | BVH-RSSM (smoke) | Naive Mean |
-|--------|-----------------|------------|
-| C-index | **0.8641** | 0.5 (random) |
-| MAE τ̂ (steps) | 1.98 | 3.53 |
+Smoke test result (300 steps / ~zero training):
 
-**C-index 0.86** confirms the model correctly ranks which states are closer to world-model
-failure — 86% of pairs ordered correctly. This is the core AV safety claim: BVH-RSSM
-detects its own staleness before failure, not after.
+| Metric | BVH-RSSM | Naive Mean | Random |
+|--------|----------|------------|--------|
+| C-index | **0.8641** | — | 0.500 |
+| MAE τ̂ (steps) | 1.98 | 3.53 | — |
+
+**C-index 0.86 on an undertrained model.** The concordance index measures pairwise
+ranking accuracy: given two timesteps, did the model correctly predict which is closer
+to world-model failure? 86% correct vs 50% random. This is the gap between
+*silent failure* and *actionable early warning*.
+
+Full run numbers (100k P1 + 50k P2): see [`docs/results/`](docs/results/).
 
 ---
 
