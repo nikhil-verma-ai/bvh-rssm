@@ -2,6 +2,26 @@
 
 Technical reference for contributors and reviewers.
 
+## What Is Novel Here
+
+Three ideas exist independently in the literature. BVH-RSSM is the first to combine them:
+
+| Idea | Prior art | This work |
+|------|-----------|-----------|
+| Recurrent world models | DreamerV3 (Hafner et al., 2023) | Base RSSM unchanged |
+| Survival analysis for time-to-event | Tutz & Schmid (2016), pycox | Applied to world model validity horizon |
+| Distribution shift detection | OOD detectors, ensemble disagreement | Predictive, not reactive — outputs τ̂ steps in advance |
+
+**The combination:** DreamerV3 gives a rich latent `h_t` that encodes recent dynamics.
+Survival analysis gives a statistically principled way to model "time until an event"
+under censoring. Applying survival analysis to the world model's own latent produces a
+*pre-failure* validity signal — something no prior world model architecture provides.
+
+**Why this matters for AV safety:** Reactive OOD detectors flag failure after predictions
+have already degraded. BVH-RSSM's τ-head outputs a countdown. At τ̂ = 8, the planner
+has 8 steps to switch policy before the world model goes stale. That window is the
+difference between graceful degradation and silent failure.
+
 ---
 
 ## Module Dependency Graph
