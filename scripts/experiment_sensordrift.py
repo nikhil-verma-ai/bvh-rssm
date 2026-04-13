@@ -69,6 +69,8 @@ def _parse():
     p = argparse.ArgumentParser()
     p.add_argument("--steps", type=int, default=None,
                    help="Override total steps (2:1 P1:P2 split)")
+    p.add_argument("--p2-steps", type=int, default=50_000,
+                   help="Number of Phase-2 BVH head training steps (default: 50000)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--save-p1", type=str, default=None, metavar="PATH")
     p.add_argument("--skip-p1", type=str, default=None, metavar="PATH")
@@ -422,7 +424,7 @@ def main():
         p1 = int(args.steps * 2 / 3)
         p2 = args.steps - p1
     else:
-        p1, p2 = (0 if skip_p1 else P1_STEPS), P2_STEPS
+        p1, p2 = (0 if skip_p1 else P1_STEPS), args.p2_steps
 
     device_str = ("mps" if torch.backends.mps.is_available()
                   else "cuda" if torch.cuda.is_available() else "cpu")
