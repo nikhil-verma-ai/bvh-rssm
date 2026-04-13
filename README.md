@@ -242,7 +242,7 @@ If you use BVH-RSSM or the FNSB benchmark environments in your research:
 
 ```bibtex
 @software{bvh_rssm_2026,
-  author    = {Vansh Verma},
+  author    = {nikhil-verma-ai},
   title     = {{BVH-RSSM}: Belief Validity Horizon Recurrent State Space Model},
   year      = {2026},
   url       = {https://github.com/nikhil-verma-ai/bvh-rssm},

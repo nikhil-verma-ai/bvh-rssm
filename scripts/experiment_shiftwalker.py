@@ -517,7 +517,7 @@ def main():
         if args.save_p1:
             save_checkpoint(model, args.save_p1, meta={
                 "p1_steps": p1, "p1_loss_late": p1_loss_late,
-                "kl_after_p1": kl_after_p1,
+                "kl_after_p1": kl_after_p1, "shift_rate": 5.0,
             })
 
     kl_before_p2 = _measure_kl(model, buf, device)
@@ -576,6 +576,7 @@ def main():
         "env": "ShiftWalker",
         "base_env": "Walker2d-v4",
         "shift_type": "abrupt_friction_poisson",
+        "shift_rate": 5.0,
         "config": {"K": K, "p1_steps": p1, "p2_steps": p2, "seed": args.seed,
                    "device": device_str},
         "phase2": {
