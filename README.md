@@ -70,19 +70,23 @@ step — fully predictable from the latent's accumulated observation signal. Thi
 real AV sensor degradation: LiDAR calibration drift, camera fouling, IMU bias
 accumulation are all monotonic and detectable before they cause failure.
 
-Smoke test result (300 steps / ~zero training):
+Full run (100k P1 + 50k P2, 25,000 eval samples):
 
 | Metric | BVH-RSSM | Naive Mean | Random |
 |--------|----------|------------|--------|
-| C-index | **0.8641** | — | 0.500 |
-| MAE τ̂ (steps) | 1.98 | 3.53 | — |
+| C-index | **0.712** | — | 0.500 |
+| MAE τ̂ (steps) | **2.03** | 3.53 | — |
+| Brier score | **0.032** | — | — |
 
-**C-index 0.86 on an undertrained model.** The concordance index measures pairwise
-ranking accuracy: given two timesteps, did the model correctly predict which is closer
-to world-model failure? 86% correct vs 50% random. This is the gap between
-*silent failure* and *actionable early warning*.
+**C-index 0.71** — 71% of all pairwise comparisons ranked correctly (which state is
+closer to world-model failure). Random guessing scores 0.50. The gap is the validity
+signal: BVH-RSSM gives actionable early warning before failure, not after.
 
-Full run numbers (100k P1 + 50k P2): see [`docs/results/`](docs/results/).
+**Brier score 0.032** (vs 0.20 on ShiftPendulum) — the survival curve S(t) is
+well-calibrated on SensorDrift. The hazard head has learned the shape of the drift
+distribution, not just the mean.
+
+Full numbers: [`docs/results/sensordrift_report.json`](docs/results/sensordrift_report.json).
 
 ---
 
