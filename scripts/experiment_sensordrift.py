@@ -37,6 +37,7 @@ from bvh_rssm.training.losses import world_model_loss, validity_loss, survival_l
 from bvh_rssm.training.experiment import set_seed
 from bvh_rssm.training.metrics import mae_tau, c_index, brier_score
 from bvh_rssm.envs.sensor_drift import SensorDrift
+from bvh_rssm.utils import symlog
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
@@ -366,7 +367,7 @@ def compute_eval_metrics(model, drift_rate, device, n_episodes=50, max_steps=500
     for m in model.values():
         m.eval()
 
-    all_tau_pred, all_tau_star, all_survival = [], [], []
+    all_tau_pred, all_tau_star, all_survival, all_recon_mse = [], [], [], []
 
     for ep in range(n_episodes):
         env   = SensorDrift(drift_rate=drift_rate, seed=ep * 100)
@@ -382,10 +383,16 @@ def compute_eval_metrics(model, drift_rate, device, n_episodes=50, max_steps=500
                 latent  = rssm.get_latent(state)
                 tau_hat = tau_head.decode(tau_head(latent, prev_a, stop_grad=False)).item()
                 S = haz_head.survival(latent).squeeze(0).cpu().numpy()
+                # Reconstruction baseline: MSE in symlog space.
+                # Higher recon_mse → model struggling → proxy for staleness.
+                mean_symlog, _ = model["decoder"].decode_symlog(latent)
+                obs_t_symlog = symlog(obs_t)
+                recon_mse = F.mse_loss(mean_symlog, obs_t_symlog).item()
 
             all_tau_pred.append(tau_hat)
             all_tau_star.append(float(info.get("oracle_tau", K)))
             all_survival.append(S)
+            all_recon_mse.append(recon_mse)
 
             action_np = env.action_space.sample()
             obs_np, _, term, trunc, info = env.step(action_np)
@@ -399,6 +406,12 @@ def compute_eval_metrics(model, drift_rate, device, n_episodes=50, max_steps=500
     S  = np.array(all_survival, dtype=np.float64)
     et = np.minimum(ts.astype(np.int32), K - 1)
 
+    # Reconstruction baseline: -recon_mse as proxy tau predictor.
+    # Higher recon_mse → model struggling → lower τ (more stale).
+    # Negating gives a score where higher = more valid = higher τ.
+    recon_arr = np.array(all_recon_mse, dtype=np.float64)
+    recon_c_idx = c_index(-recon_arr, ts)
+
     return {
         "mae_tau":        mae_tau(tp, ts),
         "naive_mean_mae": float(np.mean(np.abs(ts - ts.mean()))),
@@ -407,6 +420,8 @@ def compute_eval_metrics(model, drift_rate, device, n_episodes=50, max_steps=500
         "c_index":        c_index(tp, ts),
         "brier_score":    brier_score(S, ts, K),
         "n_samples":      len(tp),
+        "recon_mse_mean": float(recon_arr.mean()),
+        "recon_c_index":  recon_c_idx,
     }
 
 
@@ -506,6 +521,8 @@ def main():
     print(f"  Prediction std      : {metrics['pred_std']:.3f}")
     print(f"  C-index             : {metrics['c_index']:.4f}  ← TARGET >0.65")
     print(f"  Brier score         : {metrics['brier_score']:.4f}")
+    print(f"  Recon MSE (mean)    : {metrics['recon_mse_mean']:.4f}")
+    print(f"  Recon C-index       : {metrics['recon_c_index']:.4f}  (naive baseline)")
 
     n2 = len(p2_hist["tau_loss"])
     split2 = max(1, n2 // 5)
