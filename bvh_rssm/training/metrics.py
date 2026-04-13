@@ -5,11 +5,13 @@ All functions are numpy-only — no torch, no gym imports.
 All inputs are numpy arrays; all outputs are Python floats or tuples of floats.
 
 Metrics:
-    mae_tau          — Mean absolute error between predicted and oracle horizon.
-    c_index          — Concordance index (pairwise ranking accuracy).
-    brier_score      — Mean squared error between survival curve and survival indicator.
-    f1_switching     — F1 for switch-point detection with temporal tolerance.
-    delta_return     — E[Return_BVH] - E[Return_Baseline].
+    mae_tau                — Mean absolute error between predicted and oracle horizon.
+    c_index                — Concordance index (pairwise ranking accuracy).
+    brier_score            — Mean squared error between survival curve and survival indicator.
+    integrated_brier_score — IBS alias for brier_score; makes IBS interpretation explicit.
+    time_dependent_auc     — Time-dependent AUC(t) and mean AUC over all horizons.
+    f1_switching           — F1 for switch-point detection with temporal tolerance.
+    delta_return           — E[Return_BVH] - E[Return_Baseline].
 """
 from __future__ import annotations
 
@@ -113,6 +115,89 @@ def brier_score(
 
     errors = (survival_curves - indicator) ** 2        # [N, K]
     return float(np.mean(errors))
+
+
+def integrated_brier_score(
+    survival_curves: np.ndarray,  # [N, K]
+    event_times: np.ndarray,      # [N]
+    max_t: int,
+) -> float:
+    """Integrated Brier Score (IBS) — mean squared calibration error over all time points.
+
+    IBS = (1/K) * sum_{t=0}^{K-1} E[(S(t) - I(tau* > t))^2]
+
+    For uniformly-spaced discrete time intervals this equals the mean of
+    brier_score computed at each t — which is exactly what brier_score() returns
+    (it averages over both n and t dimensions).
+
+    Alias for brier_score() that makes the IBS interpretation explicit.
+    Range [0, 0.25]. Lower is better. 0.0 = perfect calibration.
+
+    Args:
+        survival_curves: [N, K] — S(0)..S(K-1) per sample.
+        event_times: [N] — oracle tau* per sample.
+        max_t: Number of time steps K.
+
+    Returns:
+        Scalar IBS in [0, 0.25].
+    """
+    return brier_score(survival_curves, event_times, max_t)
+
+
+def time_dependent_auc(
+    survival_curves: np.ndarray,  # [N, K]
+    event_times: np.ndarray,      # [N] oracle tau*
+    max_t: int,
+) -> tuple[np.ndarray, float]:
+    """Time-dependent AUC at each horizon t.
+
+    At each t, AUC(t) = P(S_i(t) < S_j(t) | tau_i* <= t < tau_j*)
+    — among pairs where i is a "case" (event by t) and j is a "control"
+    (event after t), what fraction did the model rank correctly?
+
+    Cases: samples where tau_star[i] <= t  (shift already happened)
+    Controls: samples where tau_star[j] > t  (shift not yet happened)
+    Correct ranking: S_i(t) < S_j(t)  (lower survival for case)
+    Ties count as 0.5.
+
+    Args:
+        survival_curves: [N, K] — S(0)..S(K-1) per sample.
+        event_times: [N] — oracle tau* per sample (integer steps).
+        max_t: Number of time steps K. Must equal survival_curves.shape[1].
+
+    Returns:
+        (auc_per_t, mean_auc): auc_per_t is [K] array of AUC at each horizon,
+        nan where fewer than 2 valid pairs exist. mean_auc is the mean over
+        non-nan entries.
+
+    Complexity: O(N^2 * K) — use with N <= 5000.
+    """
+    N, K = survival_curves.shape
+    assert K == max_t
+    t_vals = event_times.astype(np.int64)
+    auc_per_t = np.full(K, np.nan, dtype=np.float64)
+
+    for t in range(K):
+        case_mask = t_vals <= t      # [N] — event happened by t
+        ctrl_mask = t_vals > t       # [N] — event hasn't happened yet
+        n_cases = case_mask.sum()
+        n_ctrls = ctrl_mask.sum()
+        if n_cases == 0 or n_ctrls == 0:
+            continue
+
+        S_cases = survival_curves[case_mask, t]   # [n_cases]
+        S_ctrls = survival_curves[ctrl_mask, t]   # [n_ctrls]
+
+        # Vectorized pairwise comparison: S_i(t) < S_j(t) for each (case, ctrl) pair
+        # S_cases[:, None] < S_ctrls[None, :] → [n_cases, n_ctrls]
+        concordant = (S_cases[:, None] < S_ctrls[None, :]).sum()
+        tied = (S_cases[:, None] == S_ctrls[None, :]).sum()
+        total = n_cases * n_ctrls
+        auc_per_t[t] = float(concordant + 0.5 * tied) / total
+
+    valid = ~np.isnan(auc_per_t)
+    mean_auc = float(np.mean(auc_per_t[valid])) if valid.any() else float("nan")
+    return auc_per_t, mean_auc
 
 
 def f1_switching(

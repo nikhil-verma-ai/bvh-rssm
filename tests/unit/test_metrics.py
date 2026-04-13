@@ -9,6 +9,8 @@ from bvh_rssm.training.metrics import (
     mae_tau,
     c_index,
     brier_score,
+    integrated_brier_score,
+    time_dependent_auc,
     f1_switching,
     delta_return,
 )
@@ -114,6 +116,107 @@ class TestBrierScore:
         times = rng.integers(0, 20, 10)
         result = brier_score(curves, times, max_t=8)
         assert isinstance(result, float)
+
+
+# ---------------------------------------------------------------------------
+# integrated_brier_score
+# ---------------------------------------------------------------------------
+
+class TestIntegratedBrierScore:
+    def test_alias_matches_brier_score_exact(self):
+        """IBS must return identical float to brier_score for same inputs."""
+        rng = np.random.default_rng(42)
+        curves = rng.uniform(0.0, 1.0, (10, 8))
+        times = rng.integers(0, 20, 10)
+        assert integrated_brier_score(curves, times, max_t=8) == brier_score(curves, times, max_t=8)
+
+    def test_alias_matches_brier_score_perfect(self):
+        """Perfect calibration: IBS == brier_score == 0."""
+        event_times = np.array([100, 100, 100])
+        max_t = 5
+        survival_curves = np.ones((3, 5))
+        assert integrated_brier_score(survival_curves, event_times, max_t) == pytest.approx(0.0)
+
+    def test_alias_matches_brier_score_worst(self):
+        """Worst calibration: IBS == brier_score == 1."""
+        event_times = np.array([100, 100])
+        max_t = 5
+        survival_curves = np.zeros((2, 5))
+        assert integrated_brier_score(survival_curves, event_times, max_t) == pytest.approx(1.0)
+
+    def test_output_is_float(self):
+        rng = np.random.default_rng(7)
+        curves = rng.uniform(0, 1, (5, 4))
+        times = rng.integers(0, 10, 5)
+        result = integrated_brier_score(curves, times, max_t=4)
+        assert isinstance(result, float)
+
+
+# ---------------------------------------------------------------------------
+# time_dependent_auc
+# ---------------------------------------------------------------------------
+
+class TestTimeDependentAuc:
+    def test_mean_auc_in_unit_interval_on_random_data(self):
+        """mean_auc must lie in [0, 1] for arbitrary inputs."""
+        rng = np.random.default_rng(13)
+        N, K = 20, 10
+        curves = rng.uniform(0.0, 1.0, (N, K))
+        # event times span the full horizon to ensure both cases and controls exist
+        times = rng.integers(0, K, N)
+        _, mean_auc = time_dependent_auc(curves, times, max_t=K)
+        assert 0.0 <= mean_auc <= 1.0
+
+    def test_perfect_separation_gives_auc_near_1(self):
+        """When S perfectly separates cases from controls, AUC(t) should be 1.0."""
+        N, K = 8, 6
+        # Cases: event_time = 0, so they are cases from t=0 onward. Give them S=0.
+        # Controls: event_time = K (beyond window), S=1 everywhere.
+        n_cases = 4
+        n_ctrls = 4
+        survival_curves = np.zeros((N, K))
+        survival_curves[n_cases:, :] = 1.0     # controls have S=1
+        event_times = np.array([0] * n_cases + [K] * n_ctrls)
+        auc_per_t, mean_auc = time_dependent_auc(survival_curves, event_times, max_t=K)
+        # At each t where both groups present, AUC should be 1.0
+        valid = ~np.isnan(auc_per_t)
+        assert valid.any(), "Expected at least one valid t with both cases and controls"
+        assert np.allclose(auc_per_t[valid], 1.0)
+        assert mean_auc == pytest.approx(1.0)
+
+    def test_returns_correct_shapes(self):
+        """auc_per_t must have length K; mean_auc must be a Python float."""
+        N, K = 6, 5
+        rng = np.random.default_rng(99)
+        curves = rng.uniform(0, 1, (N, K))
+        times = rng.integers(0, K, N)
+        auc_per_t, mean_auc = time_dependent_auc(curves, times, max_t=K)
+        assert auc_per_t.shape == (K,)
+        assert isinstance(mean_auc, float)
+
+    def test_nan_where_only_cases_or_controls(self):
+        """At t=0, if no one has event_time <= 0, no cases exist → auc_per_t[0] is nan."""
+        N, K = 4, 4
+        # All event_times > 0, so at t=0 there are no cases
+        survival_curves = np.ones((N, K)) * 0.5
+        event_times = np.array([1, 2, 3, 4])
+        auc_per_t, _ = time_dependent_auc(survival_curves, event_times, max_t=K)
+        assert np.isnan(auc_per_t[0])
+
+    def test_inverse_separation_gives_auc_near_0(self):
+        """When cases have S=1 and controls S=0, ranking is perfectly reversed → AUC=0."""
+        N, K = 6, 4
+        n_cases = 3
+        n_ctrls = 3
+        survival_curves = np.zeros((N, K))
+        survival_curves[:n_cases, :] = 1.0     # cases have S=1 (wrong — higher than controls)
+        # controls have S=0 (lower survival but event hasn't happened yet)
+        event_times = np.array([0] * n_cases + [K] * n_ctrls)
+        auc_per_t, mean_auc = time_dependent_auc(survival_curves, event_times, max_t=K)
+        valid = ~np.isnan(auc_per_t)
+        assert valid.any()
+        assert np.allclose(auc_per_t[valid], 0.0)
+        assert mean_auc == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
