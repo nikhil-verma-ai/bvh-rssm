@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/vanshverma/bvh-rssm.git
+git clone https://github.com/nikhil-verma-ai/bvh-rssm.git
 cd bvh-rssm
 pip install -e ".[dev,training]"
 make test

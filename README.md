@@ -1,6 +1,6 @@
 # BVH-RSSM — Belief Validity Horizon World Model
 
-[![CI](https://github.com/vanshverma/bvh-rssm/actions/workflows/ci.yml/badge.svg)](https://github.com/vanshverma/bvh-rssm/actions/workflows/ci.yml)
+[![CI](https://github.com/nikhil-verma-ai/bvh-rssm/actions/workflows/ci.yml/badge.svg)](https://github.com/nikhil-verma-ai/bvh-rssm/actions/workflows/ci.yml)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -131,7 +131,7 @@ Full technical reference: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 Requires Python 3.11+.
 
 ```bash
-git clone https://github.com/vanshverma/bvh-rssm.git
+git clone https://github.com/nikhil-verma-ai/bvh-rssm.git
 cd bvh-rssm
 pip install -e ".[training]"  # core + training deps (no MuJoCo required for ShiftPendulum)
 ```
@@ -242,10 +242,10 @@ If you use BVH-RSSM or the FNSB benchmark environments in your research:
 
 ```bibtex
 @software{bvh_rssm_2026,
-  author    = {Vansh Verma},
+  author    = {nikhil-verma-ai},
   title     = {{BVH-RSSM}: Belief Validity Horizon Recurrent State Space Model},
   year      = {2026},
-  url       = {https://github.com/vanshverma/bvh-rssm},
+  url       = {https://github.com/nikhil-verma-ai/bvh-rssm},
   note      = {Research implementation}
 }
 ```
