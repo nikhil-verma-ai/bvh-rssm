@@ -192,8 +192,14 @@ class Trainer:
                     nn.ModuleDict(self.model), optimizer, phase=2, step=self._global_step
                 )
 
-    def train_phase3(self) -> None:
+    def train_phase3(self, imagination_gating: bool = False) -> None:
         """Phase 3: joint fine-tuning with actor-critic in imagination space.
+
+        Args:
+            imagination_gating: If True, gate imagination depth per step using
+                AdaptivePolicyRouter. tau_hat and S(t) are computed at the start
+                of each imagination rollout; H = router.imagination_horizon(state, tau_hat).
+                If False, always use full_horizon (DreamerV3 baseline).
 
         All weights are unfrozen. Three separate optimizers:
           - wm_optimizer:          encoder + decoder + rssm + reward_head + continue_head
@@ -244,6 +250,9 @@ class Trainer:
             ac_optimizer = None
 
         full_horizon = 16
+        from bvh_rssm.causal.router import AdaptivePolicyRouter
+        router = AdaptivePolicyRouter() if imagination_gating else None
+
         gamma = self.cfg.gamma
         lambda_ = self.cfg.lambda_
         entropy_coef = self.cfg.entropy_coef
@@ -340,6 +349,21 @@ class Trainer:
                 # shape: [B, latent_dim] — last timestep of the real sequence
                 start_latent = latents_stacked[:, -1, :].detach()  # [B, latent_dim]
 
+                # ---- BVH imagination gating ----
+                if imagination_gating:
+                    # Use first batch element to derive horizon (all share same drift phase)
+                    with torch.no_grad():
+                        tau_hat_val = float(
+                            tau_head.decode(
+                                tau_head(start_latent[:1], actions[:, -1, :][:1], stop_grad=True)
+                            ).mean().item()
+                        )
+                        S_t = hazard_head.survival(start_latent[:1])[0]  # [K]
+                    state_route = router.classify(tau_hat_val, S_t)
+                    H = router.imagination_horizon(state_route, tau_hat_val, full_horizon=full_horizon)
+                else:
+                    H = full_horizon
+
                 # Unroll H imagination steps
                 imagined_latents:   List[torch.Tensor] = []
                 imagined_rewards:   List[torch.Tensor] = []
@@ -355,7 +379,7 @@ class Trainer:
                 from bvh_rssm.networks.rssm import State
                 img_state = State(h=img_h, z=img_z)
 
-                for _ in range(full_horizon):
+                for _ in range(H):
                     lat = rssm.get_latent(img_state)                    # [B, latent_dim]
                     imagined_latents.append(lat)
 
@@ -395,8 +419,7 @@ class Trainer:
                 bins = symlog_bins(critic.n_bins).to(self.device)
                 last_val = symexp(twohot_decode(last_val_logits.softmax(-1), bins))  # [B]
 
-                # Stack into [H, B]
-                H = full_horizon
+                # Stack into [H, B] — H already set by gating logic above
                 rew_stack  = torch.stack(imagined_rewards, dim=0)       # [H, B]
                 cont_stack = torch.stack(imagined_continues, dim=0)     # [H, B]
                 val_stack  = torch.stack(imagined_values, dim=0)        # [H, B]
