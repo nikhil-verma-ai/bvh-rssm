@@ -57,6 +57,7 @@ from bvh_rssm.networks.actor_critic import Actor, Critic
 from bvh_rssm.causal.router import AdaptivePolicyRouter, RouterState
 from bvh_rssm.training.replay_buffer import ReplayBuffer
 from bvh_rssm.training.trainer import Trainer, TrainerConfig
+from bvh_rssm.training.losses import validity_loss, survival_loss
 from bvh_rssm.training.experiment import set_seed
 from bvh_rssm.envs.sensor_drift import SensorDrift
 
@@ -74,7 +75,13 @@ EMBED_DIM  = 256
 HIDDEN_DIM = 256
 N_BINS     = 64
 
-WM_KEYS = ["encoder", "decoder", "rssm", "reward_head", "continue_head"]
+WM_KEYS   = ["encoder", "decoder", "rssm", "reward_head", "continue_head"]
+HEAD_KEYS = ["tau_head", "hazard_head"]
+
+P2_HEAD_LR  = 1e-3
+P2_SEQ_LEN  = 64
+P2_BURNIN   = 32
+P2_LOG_EVERY = 5_000
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -114,6 +121,100 @@ def load_checkpoint(model: dict, path: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Phase 2: retrain BVH heads from loaded WM checkpoint
+# ──────────────────────────────────────────────────────────────────────────────
+
+def phase2_train_heads(
+    model: dict,
+    buf: ReplayBuffer,
+    device: torch.device,
+    n_steps: int,
+) -> None:
+    """Train tau_head and hazard_head with frozen world model.
+
+    Mirrors experiment_sensordrift.py phase2_train() logic.
+    Modifies model in-place.
+    """
+    # Freeze WM, unfreeze heads
+    for k in WM_KEYS:
+        for p in model[k].parameters():
+            p.requires_grad_(False)
+    for k in HEAD_KEYS:
+        for p in model[k].parameters():
+            p.requires_grad_(True)
+
+    for m in model.values():
+        m.train()
+
+    head_params = [p for k in HEAD_KEYS for p in model[k].parameters()]
+    opt = torch.optim.Adam(head_params, lr=P2_HEAD_LR)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_steps, eta_min=1e-5)
+
+    rssm   = model["rssm"]
+    enc    = model["encoder"]
+    tau_h  = model["tau_head"]
+    haz_h  = model["hazard_head"]
+
+    # Seed buffer with more SensorDrift experience for Phase 2 (longer sequences)
+    env     = SensorDrift(drift_rate=DRIFT_RATE, seed=99)
+    obs_np, _ = env.reset(seed=99)
+    print("[p2] Collecting 5000 seed steps …")
+    for _ in range(5000):
+        act = env.action_space.sample().astype(np.float32)
+        obs_next, rew, term, trunc, info = env.step(act)
+        buf.push(
+            obs=obs_np, action=act, reward=float(rew),
+            terminated=bool(term or trunc),
+            oracle_tau=float(info.get("oracle_tau", K)),
+            is_interventionist=False, rng_state={},
+        )
+        obs_np = obs_next if not (term or trunc) else env.reset()[0]
+    env.close()
+
+    t0 = time.time()
+    for step in range(n_steps):
+        batch      = buf.sample(16, P2_SEQ_LEN)
+        obs        = batch["obs"].to(device)
+        actions    = batch["action"].to(device)
+        oracle_tau = batch["oracle_tau"].float().to(device)
+
+        with torch.no_grad():
+            state   = rssm.initial_state(16, device=device)
+            latents = []
+            for t in range(obs.shape[1]):
+                emb = enc(obs[:, t])
+                _, state = rssm.observe(emb, actions[:, t], state)
+                latents.append(rssm.get_latent(state))
+            latents_post = latents[P2_BURNIN:]
+
+        post_actions = actions[:, P2_BURNIN:]
+        post_tau     = oracle_tau[:, P2_BURNIN:]
+        flat_lat     = torch.stack(latents_post, 1).reshape(-1, latents_post[0].shape[-1])
+        flat_act     = post_actions.reshape(-1, post_actions.shape[-1])
+        flat_tau     = post_tau.reshape(-1)
+        event_t      = flat_tau.long().clamp(0, K - 1)
+        ev_occ       = (flat_tau < K)
+
+        opt.zero_grad()
+        v_loss = validity_loss(tau_h, flat_lat, flat_act, flat_tau, stop_grad=True)
+        s_loss = survival_loss(haz_h, flat_lat, event_t, ev_occ, use_all_sources=False)
+        (v_loss + s_loss).backward()
+        torch.nn.utils.clip_grad_norm_(head_params, 5.0)
+        opt.step()
+        scheduler.step()
+
+        if step % P2_LOG_EVERY == 0:
+            print(
+                f"  P2 step {step:6d}/{n_steps}  "
+                f"tau_loss={v_loss.item():.3f}  "
+                f"surv_loss={s_loss.item():.3f}  "
+                f"({time.time()-t0:.0f}s)"
+            )
+
+    print(f"[p2] Done — {n_steps} steps in {time.time()-t0:.0f}s")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Episode rollout
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -123,9 +224,22 @@ def run_episode(
     seed: int,
     device: torch.device,
     use_bvh_gate: bool,
+    stale_threshold: float = 3.0,
     max_steps: int = 500,
 ) -> dict:
     """Run one episode and return metrics.
+
+    BVH gating uses a direct tau_hat threshold: when tau_hat < stale_threshold,
+    the model is within `stale_threshold` steps of going stale and zero-action
+    is the safe fallback. This is more robust than the router's survival-curve
+    thresholds because the tau_head and hazard_head co-track tau* when both are
+    well-trained — making the adaptive thresholds move together and preventing
+    STALE from ever firing via the router path alone.
+
+    Args:
+        stale_threshold: Use zero-action when tau_hat < this value (default 3.0).
+            On SensorDrift (K=16), this fires in the last ~3/16 ≈ 19% of each
+            drift cycle — right when imagined dynamics are maximally noisy.
 
     Returns:
         dict with: total_return, stale_triggered, first_stale_step, n_steps
@@ -133,12 +247,10 @@ def run_episode(
     env       = SensorDrift(drift_rate=DRIFT_RATE, seed=seed)
     obs_np, _ = env.reset(seed=seed)
 
-    router = AdaptivePolicyRouter()
-    rssm   = model["rssm"]
-    enc    = model["encoder"]
-    actor  = model["actor"]
-    tau_h  = model["tau_head"]
-    haz_h  = model["hazard_head"]
+    rssm  = model["rssm"]
+    enc   = model["encoder"]
+    actor = model["actor"]
+    tau_h = model["tau_head"]
 
     state     = rssm.initial_state(1, device=device)
     prev_act  = torch.zeros(1, ACTION_DIM, device=device)
@@ -154,13 +266,11 @@ def run_episode(
         _, state = rssm.observe(emb, prev_act, state)
         lat = rssm.get_latent(state)  # [1, latent_dim]
 
-        # Compute τ̂ and S(t)
+        # Compute τ̂ from trained validity head
         tau_hat = float(tau_h.decode(tau_h(lat, prev_act, stop_grad=True)).mean().item())
-        S_t     = haz_h.survival(lat)[0]        # [K]
-        route   = router.classify(tau_hat, S_t)
 
-        # Policy decision
-        if use_bvh_gate and route == RouterState.STALE:
+        # Policy decision — BVH gate: zero-action when τ̂ below absolute threshold
+        if use_bvh_gate and tau_hat < stale_threshold:
             action_np = np.zeros(ACTION_DIM, dtype=np.float32)
             if not stale_triggered:
                 stale_triggered  = True
@@ -206,15 +316,24 @@ def run_eval(args) -> dict:
         print(f"[eval] Loading checkpoint: {args.checkpoint}")
         load_checkpoint(model, args.checkpoint)
 
+    if args.p2_steps > 0:
+        print(f"[eval] Running Phase 2 head training ({args.p2_steps} steps) …")
+        buf_p2 = ReplayBuffer(capacity=50_000, obs_dim=OBS_DIM, action_dim=ACTION_DIM)
+        phase2_train_heads(model, buf_p2, device, args.p2_steps)
+
     for m in model.values():
         m.eval()
 
     seeds = list(range(args.n_episodes))  # fixed seeds 0..N-1
 
+    stale_threshold = args.stale_threshold
+    print(f"[eval] BVH stale_threshold={stale_threshold}")
+
     print("[eval] Running BVH policy …")
     bvh_results = []
     for i, seed in enumerate(seeds):
-        r = run_episode(model, seed=seed, device=device, use_bvh_gate=True)
+        r = run_episode(model, seed=seed, device=device, use_bvh_gate=True,
+                        stale_threshold=stale_threshold)
         bvh_results.append(r)
         if (i + 1) % 20 == 0:
             mean_ret = np.mean([x["total_return"] for x in bvh_results])
@@ -247,6 +366,7 @@ def run_eval(args) -> dict:
         "mode":                    "eval",
         "n_episodes":              args.n_episodes,
         "checkpoint":              args.checkpoint,
+        "stale_threshold":         stale_threshold,
         "bvh_mean_return":         float(np.mean(bvh_rets)),
         "vanilla_mean_return":     float(np.mean(vanilla_rets)),
         "delta_return_inference":  float(np.mean(bvh_rets) - np.mean(vanilla_rets)),
@@ -288,8 +408,12 @@ def run_train(args) -> dict:
         print(f"[train] Loading checkpoint: {args.checkpoint}")
         load_checkpoint(model, args.checkpoint)
 
-    # Seed replay buffer with random SensorDrift experience
+    # Seed replay buffer — used for both Phase 2 (if requested) and Phase 3
     buf = ReplayBuffer(capacity=100_000, obs_dim=OBS_DIM, action_dim=ACTION_DIM)
+
+    if args.p2_steps > 0:
+        print(f"[train] Running Phase 2 head training ({args.p2_steps} steps) …")
+        phase2_train_heads(model, buf, device, args.p2_steps)
     env     = SensorDrift(drift_rate=DRIFT_RATE, seed=42)
     obs_np, _ = env.reset(seed=42)
     print("[train] Seeding replay buffer (2000 random steps) …")
@@ -346,7 +470,8 @@ def run_train(args) -> dict:
     print("[train] Evaluating trained actor (200 episodes) …")
     trained_results = []
     for i, seed in enumerate(seeds):
-        r = run_episode(model, seed=seed, device=device, use_bvh_gate=args.gated)
+        r = run_episode(model, seed=seed, device=device, use_bvh_gate=args.gated,
+                        stale_threshold=args.stale_threshold)
         trained_results.append(r)
         if (i + 1) % 20 == 0:
             mean_ret = np.mean([x["total_return"] for x in trained_results])
@@ -401,10 +526,17 @@ def _parse() -> argparse.Namespace:
                    help="Path to Phase 1+2 checkpoint (e.g. checkpoints/sd_p1_v2.pt)")
     p.add_argument("--n-episodes", type=int, default=200,
                    help="Number of eval episodes (Part A, default: 200)")
+    p.add_argument("--p2-steps", type=int, default=50_000,
+                   help="Phase 2 head training steps before eval/train (default: 50000). "
+                        "Set 0 to skip if checkpoint already contains tau_head weights.")
     p.add_argument("--phase3-steps", type=int, default=50_000,
                    help="Phase 3 training steps (Part B, default: 50000)")
     p.add_argument("--gated", action="store_true",
                    help="Enable BVH imagination gating during training (Part B)")
+    p.add_argument("--stale-threshold", type=float, default=3.0,
+                   help="Use zero-action when tau_hat < this value (default: 3.0). "
+                        "On SensorDrift (K=16), fires in the last ~3 steps of each "
+                        "16-step drift cycle when imagined dynamics are most noisy.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", type=str, default="results/phase3_report.json")
     return p.parse_args()

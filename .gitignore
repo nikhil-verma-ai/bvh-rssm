@@ -52,5 +52,3 @@ htmlcov/
 results/eval_*.json
 validation_report.json
 
-# Internal tooling
-docs/

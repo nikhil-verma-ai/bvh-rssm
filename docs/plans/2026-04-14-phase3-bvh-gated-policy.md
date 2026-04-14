@@ -1,7 +1,5 @@
 # Phase 3: BVH-Gated Policy — Implementation Plan
 
-
-
 **Goal:** Demonstrate that τ̂ signal improves task performance on SensorDrift — delta_return > 0 for BVH-gated policy vs. vanilla policy using identical weights.
 
 **Architecture:** Part A loads the trained Phase 1+2 checkpoint and runs 200 eval episodes under two policies (BVH-gated vs vanilla), reporting delta_return. Part B modifies train_phase3() to accept an `imagination_gating` flag that gates horizon depth via AdaptivePolicyRouter, then trains two actors from the same checkpoint for comparison.
@@ -969,7 +967,7 @@ Expected: All tests pass.
 cd /Users/nikhil-verma-ai/bvh-rssm
 git add README.md docs/results/README.md docs/results/phase3_eval_report.json
 git commit -m "docs(phase3): document delta_return breakthrough — BVH-gated policy results"
-git push github-nikhil main
+git push github-nikhil-verma-ai main
 ```
 
 ---
