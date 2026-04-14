@@ -72,6 +72,12 @@ def _parse():
                    help="Override total steps (2:1 P1:P2 split)")
     p.add_argument("--p2-steps", type=int, default=50_000,
                    help="Number of Phase-2 BVH head training steps (default: 50000)")
+    p.add_argument("--p1-steps", type=int, default=P1_STEPS,
+                   help=f"Number of Phase-1 world model training steps (default: {P1_STEPS})")
+    p.add_argument("--h-dim", type=int, default=200,
+                   help="RSSM hidden (GRU) dimension (default: 200)")
+    p.add_argument("--aux-tau-weight", type=float, default=AUX_TAU_WEIGHT,
+                   help=f"Auxiliary tau loss weight during P1 (default: {AUX_TAU_WEIGHT})")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--save-p1", type=str, default=None, metavar="PATH")
     p.add_argument("--skip-p1", type=str, default=None, metavar="PATH")
@@ -79,8 +85,8 @@ def _parse():
     return p.parse_args()
 
 
-def build_model(device):
-    h_dim, z_cats, z_classes = 200, 8, 8
+def build_model(device, h_dim: int = 200):
+    z_cats, z_classes        = 8, 8
     embed_dim, hidden_dim    = 256, 256
     n_bins                   = 64
     z_dim      = z_cats * z_classes
@@ -225,7 +231,7 @@ def _measure_kl(model, buf, device, n_batches=10):
 # Phase 1: World model training
 # ─────────────────────────────────────────────────────────────────────────────
 
-def phase1_train(model, buf, stepper, device, n_steps, log_every):
+def phase1_train(model, buf, stepper, device, n_steps, log_every, aux_tau_weight=AUX_TAU_WEIGHT):
     for m in model.values():
         m.train()
 
@@ -263,7 +269,7 @@ def phase1_train(model, buf, stepper, device, n_steps, log_every):
         flat_tau = oracle_tau.reshape(-1)
         aux_tau = validity_loss(tau_h, lat, acts, flat_tau, stop_grad=False)
 
-        total = losses["total"] + AUX_TAU_WEIGHT * aux_tau
+        total = losses["total"] + aux_tau_weight * aux_tau
 
         opt.zero_grad()
         total.backward()
@@ -439,7 +445,7 @@ def main():
         p1 = int(args.steps * 2 / 3)
         p2 = args.steps - p1
     else:
-        p1, p2 = (0 if skip_p1 else P1_STEPS), args.p2_steps
+        p1, p2 = (0 if skip_p1 else args.p1_steps), args.p2_steps
 
     device_str = ("mps" if torch.backends.mps.is_available()
                   else "cuda" if torch.cuda.is_available() else "cpu")
@@ -454,7 +460,7 @@ def main():
     print(f"  seed_steps={SEED_STEPS}  P1={p1}  P2={p2}")
     print(f"{'='*70}\n")
 
-    model, latent_dim = build_model(device)
+    model, latent_dim = build_model(device, h_dim=args.h_dim)
     buf = ReplayBuffer(capacity=BUF_CAPACITY, obs_dim=OBS_DIM,
                        action_dim=ACTION_DIM, seq_len=16)
     stepper = SDStepper(drift_rate=DRIFT_RATE, seed=args.seed, device=device)
@@ -483,7 +489,8 @@ def main():
         print(f"[Step 1] Phase 1 — world model pretraining ({p1} steps)")
         kl_before_p1 = _measure_kl(model, buf, device)
         print(f"  KL before P1: {kl_before_p1:.4f}")
-        p1_hist = phase1_train(model, buf, stepper, device, p1, LOG_EVERY)
+        p1_hist = phase1_train(model, buf, stepper, device, p1, LOG_EVERY,
+                               aux_tau_weight=args.aux_tau_weight)
         kl_after_p1 = _measure_kl(model, buf, device)
         print(f"\n  KL after P1: {kl_after_p1:.4f}")
 

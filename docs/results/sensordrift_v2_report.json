@@ -1,0 +1,40 @@
+{
+  "env": "SensorDrift",
+  "drift_rate": 0.03125,
+  "config": {
+    "K": 16,
+    "p1_steps": 200000,
+    "p2_steps": 100000,
+    "seed": 42,
+    "device": "mps"
+  },
+  "phase2": {
+    "tau_loss_early": 0.1435522588901222,
+    "tau_loss_late": 0.08461797382915393,
+    "kl_before": 1.283266804367304,
+    "kl_after": 1.2817419417202474,
+    "kl_increase": -0.0015248626470565352
+  },
+  "eval_metrics": {
+    "mae_tau": 1.8273358345031738,
+    "naive_mean_mae": 3.5323352813720703,
+    "naive_zero_mae": 1.8490400314331055,
+    "pred_std": 0.43885940313339233,
+    "c_index": 0.9632896692380558,
+    "brier_score": 0.018038634747171833,
+    "n_samples": 25000,
+    "recon_mse_mean": 3.0005692206925154,
+    "recon_c_index": 0.872621597103379
+  },
+  "pass_fail": {
+    "p1_loss_decreasing": true,
+    "kl_not_collapsed": true,
+    "stopgrad_ok": true,
+    "tau_loss_decreasing": true,
+    "beats_naive_mean": true,
+    "beats_naive_zero": true,
+    "prediction_not_collapsed": false,
+    "c_index": 0.9632896692380558,
+    "c_index_breakthrough": true
+  }
+}
