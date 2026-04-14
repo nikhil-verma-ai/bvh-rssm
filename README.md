@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > **A world model that signals its own staleness — before failure, not after.**
+> C-index 0.963 on SensorDrift (25,000 eval samples). Beats passive reconstruction baseline (0.873) by 9 points.
 
 Model-based RL agents fail silently under distribution shift. When a world model's
 internalized dynamics go stale, predictions degrade — but the agent has no mechanism
@@ -70,23 +71,31 @@ step — fully predictable from the latent's accumulated observation signal. Thi
 real AV sensor degradation: LiDAR calibration drift, camera fouling, IMU bias
 accumulation are all monotonic and detectable before they cause failure.
 
-Full run (100k P1 + 50k P2, 25,000 eval samples):
+Full run (200k P1 + 100k P2, h_dim=512, aux_τ_weight=1.0, 25,000 eval samples):
 
-| Metric | BVH-RSSM | Naive Mean | Random |
-|--------|----------|------------|--------|
-| C-index | **0.712** | — | 0.500 |
-| MAE τ̂ (steps) | **2.03** | 3.53 | — |
-| Brier score | **0.032** | — | — |
+| Metric | BVH-RSSM | Recon Baseline | Random |
+|--------|----------|----------------|--------|
+| C-index | **0.963** | 0.873 | 0.500 |
+| MAE τ̂ (steps) | **1.83** | — | — |
+| Brier score | **0.018** | — | — |
 
-**C-index 0.71** — 71% of all pairwise comparisons ranked correctly (which state is
-closer to world-model failure). Random guessing scores 0.50. The gap is the validity
-signal: BVH-RSSM gives actionable early warning before failure, not after.
+**C-index 0.963** — 96% of all pairwise comparisons ranked correctly. Random = 0.50,
+so BVH-RSSM is operating at 93% above chance on staleness ranking.
 
-**Brier score 0.032** (vs 0.20 on ShiftPendulum) — the survival curve S(t) is
-well-calibrated on SensorDrift. The hazard head has learned the shape of the drift
-distribution, not just the mean.
+**Beats the reconstruction baseline (0.873).** A natural competing approach is to use
+the decoder's reconstruction MSE as a staleness proxy — when the world model struggles
+to reconstruct observations, it's going stale. That passive signal scores 0.873. The
+τ-head at 0.963 extracts additional structure from the latent that raw reconstruction
+error misses: it has learned *when* the model will fail, not just *that* it is failing.
+This gap — 0.963 vs 0.873 — is the value of explicit validity horizon training.
 
-Full numbers: [`docs/results/sensordrift_report.json`](docs/results/sensordrift_report.json).
+**Brier score 0.018** — survival curve S(t) is tightly calibrated. The hazard head
+has learned the shape of the drift distribution, not just the mean.
+
+**Stop-grad invariant held:** KL change during P2 = −0.0015 nat (threshold <0.5 nat).
+Head training did not perturb the world model.
+
+Full numbers: [`docs/results/sensordrift_v2_report.json`](docs/results/sensordrift_v2_report.json).
 
 ---
 
